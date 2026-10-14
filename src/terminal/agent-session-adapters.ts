@@ -603,6 +603,15 @@ function toBracketedPasteSubmission(command: string): string {
 	return `\u001b[200~${command}\u001b[201~\r`;
 }
 
+// sked fork: opt-in. When set, autonomous Claude cards run with --dangerously-skip-permissions
+// instead of --permission-mode auto, i.e. with no permission checks at all.
+const CLAUDE_SKIP_PERMISSIONS_ENV = "KANBAN_CLAUDE_SKIP_PERMISSIONS";
+
+function isClaudeSkipPermissionsEnabled(): boolean {
+	const value = process.env[CLAUDE_SKIP_PERMISSIONS_ENV]?.trim().toLowerCase();
+	return value === "1" || value === "true";
+}
+
 const claudeAdapter: AgentSessionAdapter = {
 	async prepare(input) {
 		const args = [...input.args];
@@ -620,7 +629,11 @@ const claudeAdapter: AgentSessionAdapter = {
 			!hasCliOption(args, "--permission-mode") &&
 			!hasCliOption(args, "--dangerously-skip-permissions")
 		) {
-			args.push("--permission-mode", "auto");
+			if (isClaudeSkipPermissionsEnabled()) {
+				args.push("--dangerously-skip-permissions");
+			} else {
+				args.push("--permission-mode", "auto");
+			}
 		}
 		if (input.resumeFromTrash && !hasCliOption(args, "--continue")) {
 			args.push("--continue");

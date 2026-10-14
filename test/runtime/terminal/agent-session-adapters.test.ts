@@ -636,6 +636,44 @@ describe("prepareAgentLaunch hook strategies", () => {
 		}
 	});
 
+	it("uses --dangerously-skip-permissions for autonomous claude only when KANBAN_CLAUDE_SKIP_PERMISSIONS is set", async () => {
+		setupTempHome();
+		const previous = process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS;
+		try {
+			process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS = "1";
+			const launch = await prepareAgentLaunch({
+				taskId: "task-claude-skip",
+				agentId: "claude",
+				binary: "claude",
+				args: [],
+				autonomousModeEnabled: true,
+				cwd: "/tmp",
+				prompt: "",
+			});
+			expect(launch.args).toContain("--dangerously-skip-permissions");
+			expect(launch.args).not.toContain("--permission-mode");
+
+			const planLaunch = await prepareAgentLaunch({
+				taskId: "task-claude-skip-plan",
+				agentId: "claude",
+				binary: "claude",
+				args: [],
+				autonomousModeEnabled: true,
+				startInPlanMode: true,
+				cwd: "/tmp",
+				prompt: "",
+			});
+			expect(planLaunch.args).not.toContain("--dangerously-skip-permissions");
+			expect(planLaunch.args[planLaunch.args.indexOf("--permission-mode") + 1]).toBe("plan");
+		} finally {
+			if (previous === undefined) {
+				delete process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS;
+			} else {
+				process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS = previous;
+			}
+		}
+	});
+
 	it("applies autonomous mode flags in adapters for non-droid CLIs", async () => {
 		setupTempHome();
 

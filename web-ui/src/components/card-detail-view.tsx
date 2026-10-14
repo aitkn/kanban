@@ -34,7 +34,8 @@ import { useWindowEvent } from "@/utils/react-use";
 
 // We still poll the open detail diff because line content can change without changing
 // the overall file or line counts that drive the shared workspace metadata stream.
-const DETAIL_DIFF_POLL_INTERVAL_MS = 1_000;
+// sked fork: timed diff polling in the card detail view is off (upstream polls every 1s).
+const DETAIL_DIFF_POLL_INTERVAL_MS: number | null = null;
 const DIFF_MODE_ACTIVE_BACKGROUND = "color-mix(in srgb, var(--color-surface-3) 80%, var(--color-text-primary))";
 
 function isTypingTarget(target: EventTarget | null): boolean {
