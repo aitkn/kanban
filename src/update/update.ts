@@ -501,6 +501,15 @@ export function detectAutoUpdateInstallation(options: {
 	};
 }
 
+// sked fork: a fork build carries a "-sked.N" prerelease suffix. npm's "kanban" is the official
+// package, so updating from it would replace the fork with upstream (and a prerelease always
+// compares older than its release, so it would do so immediately). Fork builds never self-update.
+const SKED_FORK_RELEASES_URL = "https://github.com/aitkn/kanban/releases";
+
+export function isSkedForkVersion(version: string): boolean {
+	return /-sked\./u.test(version);
+}
+
 function isAutoUpdateDisabled(env: NodeJS.ProcessEnv): boolean {
 	if (env.KANBAN_NO_AUTO_UPDATE === "1") {
 		return true;
@@ -594,6 +603,15 @@ export function runPendingAutoUpdateOnShutdown(options?: {
 }
 
 export async function runOnDemandUpdate(options: OnDemandUpdateOptions): Promise<OnDemandUpdateResult> {
+	if (isSkedForkVersion(options.currentVersion)) {
+		return {
+			status: "unsupported_installation",
+			currentVersion: options.currentVersion,
+			latestVersion: null,
+			packageManager: UpdatePackageManager.UNKNOWN,
+			message: `This is the aitkn fork of Kanban; install a newer fork build from ${SKED_FORK_RELEASES_URL}.`,
+		};
+	}
 	const entrypointArg = options.argv?.[1] ?? process.argv[1];
 	if (!entrypointArg) {
 		return {
@@ -708,7 +726,7 @@ export async function runOnDemandUpdate(options: OnDemandUpdateOptions): Promise
 
 export async function runAutoUpdateCheck(options: UpdateStartupOptions): Promise<void> {
 	const env = options.env ?? process.env;
-	if (isAutoUpdateDisabled(env)) {
+	if (isAutoUpdateDisabled(env) || isSkedForkVersion(options.currentVersion)) {
 		return;
 	}
 

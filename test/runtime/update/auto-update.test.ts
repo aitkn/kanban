@@ -599,3 +599,46 @@ describe("getPendingUpdateNotification", () => {
 		expect(getPendingUpdateNotification()).toBeNull();
 	});
 });
+
+describe("sked fork builds never self-update", () => {
+	it("skips the startup auto-update for a -sked.N version", async () => {
+		let fetched = false;
+		const spawnedUpdates: Array<{ command: string; args: string[] }> = [];
+		await runAutoUpdateCheck({
+			currentVersion: "1.0.0-sked.1",
+			packageName: "kanban",
+			argv: ["node", "/usr/local/lib/node_modules/kanban/dist/cli.js"],
+			cwd: "/Users/saoud/projects/work",
+			env: {},
+			resolveRealPath: (path) => path,
+			fetchLatestVersion: async () => {
+				fetched = true;
+				return "1.0.0";
+			},
+			spawnUpdate: (command, args) => {
+				spawnedUpdates.push({ command, args });
+			},
+		});
+		expect(fetched).toBe(false);
+		expect(spawnedUpdates).toEqual([]);
+	});
+
+	it("refuses an on-demand update for a -sked.N version", async () => {
+		let runUpdateCalled = false;
+		const result = await runOnDemandUpdate({
+			currentVersion: "1.0.0-sked.1",
+			packageName: "kanban",
+			argv: ["node", "/usr/local/lib/node_modules/kanban/dist/cli.js"],
+			cwd: "/Users/saoud/projects/work",
+			resolveRealPath: (path) => path,
+			fetchLatestVersion: async () => "1.0.0",
+			runUpdateCommand: () => {
+				runUpdateCalled = true;
+				return 0;
+			},
+		});
+		expect(runUpdateCalled).toBe(false);
+		expect(result.status).toBe("unsupported_installation");
+		expect(result.message).toContain("github.com/aitkn/kanban/releases");
+	});
+});
