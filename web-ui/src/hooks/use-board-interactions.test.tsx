@@ -96,6 +96,7 @@ function HookHarness({
 	selectedCard = null,
 	setSelectedTaskIdOverride,
 	onSnapshot,
+	initialSessions,
 }: {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
@@ -106,8 +107,9 @@ function HookHarness({
 	selectedCard?: { card: BoardCard; column: { id: "backlog" | "in_progress" | "review" | "trash" } } | null;
 	setSelectedTaskIdOverride?: Dispatch<SetStateAction<string | null>>;
 	onSnapshot?: (snapshot: HookSnapshot) => void;
+	initialSessions?: Record<string, RuntimeTaskSessionSummary>;
 }): null {
-	const [sessions, setSessions] = useState<Record<string, RuntimeTaskSessionSummary>>({});
+	const [sessions, setSessions] = useState<Record<string, RuntimeTaskSessionSummary>>(initialSessions ?? {});
 	const [, setSelectedTaskId] = useState<string | null>(null);
 	const [, setIsClearTrashDialogOpen] = useState(false);
 	const [, setIsGitHistoryOpen] = useState(false);
@@ -772,5 +774,69 @@ describe("useBoardInteractions", () => {
 			expect(stopTaskSession).toHaveBeenCalledWith(task.id);
 			expect(cleanupTaskWorkspace).toHaveBeenCalledWith(task.id);
 		}
+	});
+	it("moves a Backlog card beside the session it started after a dropped Start, but not for a reused id", async () => {
+		useProgrammaticCardMovesMock.mockReturnValue({
+			handleProgrammaticCardMoveReady: () => {},
+			setRequestMoveTaskToTrashHandler: () => {},
+			tryProgrammaticCardMove: () => "unavailable",
+			consumeProgrammaticCardMove: () => ({}),
+			resolvePendingProgrammaticTrashMove: () => {},
+			waitForProgrammaticCardMoveAvailability: async () => {},
+			resetProgrammaticCardMoves: () => {},
+			requestMoveTaskToTrashWithAnimation: async () => {},
+			programmaticCardMoveCycle: 0,
+		});
+		useLinkedBacklogTaskActionsMock.mockReturnValue({
+			handleCreateDependency: () => {},
+			handleDeleteDependency: () => {},
+			confirmMoveTaskToTrash: async () => {},
+			requestMoveTaskToTrash: async () => {},
+		});
+
+		let board: BoardData = {
+			columns: [
+				{
+					id: "backlog",
+					title: "Backlog",
+					cards: [
+						createTask("task-running", "Dropped start, running", 100),
+						createTask("task-waiting", "Dropped start, awaiting review", 100),
+						createTask("task-reused", "New card reusing an old id", 500),
+					],
+				},
+				{ id: "in_progress", title: "In Progress", cards: [] },
+				{ id: "review", title: "Review", cards: [] },
+				{ id: "trash", title: "Done", cards: [] },
+			],
+			dependencies: [],
+		};
+		const setBoard = vi.fn<Dispatch<SetStateAction<BoardData>>>((next) => {
+			board = typeof next === "function" ? next(board) : next;
+		});
+		const summary = (taskId: string, state: string, startedAt: number) =>
+			({ taskId, state, startedAt, updatedAt: startedAt }) as unknown as RuntimeTaskSessionSummary;
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					board={board}
+					setBoard={setBoard}
+					ensureTaskWorkspace={async () => ({ ok: true as const })}
+					startTaskSession={async () => ({ ok: true as const })}
+					initialSessions={{
+						"task-running": summary("task-running", "running", 200),
+						"task-waiting": summary("task-waiting", "awaiting_review", 200),
+						"task-reused": summary("task-reused", "awaiting_review", 300),
+					}}
+				/>,
+			);
+		});
+
+		const columnOf = (taskId: string) =>
+			board.columns.find((column) => column.cards.some((card) => card.id === taskId))?.id;
+		expect(columnOf("task-running")).toBe("in_progress");
+		expect(columnOf("task-waiting")).toBe("review");
+		expect(columnOf("task-reused")).toBe("backlog");
 	});
 });

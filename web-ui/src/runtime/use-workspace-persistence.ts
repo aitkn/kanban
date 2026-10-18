@@ -5,6 +5,7 @@ import type {
 	RuntimeWorkspaceStateSaveRequest,
 } from "@/runtime/types";
 import { WorkspaceStateConflictError } from "@/runtime/workspace-state-query";
+import { recordConfirmedBoard } from "@/stores/board-persistence-confirmations";
 import type { BoardData } from "@/types";
 
 const WORKSPACE_STATE_PERSIST_DEBOUNCE_MS = 120;
@@ -112,6 +113,7 @@ export function useWorkspacePersistence({
 						workspaceId: persistWorkspaceId,
 						payload,
 					});
+					recordConfirmedBoard(board, "saved");
 					if (
 						requestId !== latestPersistRequestIdRef.current ||
 						currentProjectIdRef.current !== persistWorkspaceId
@@ -123,11 +125,15 @@ export function useWorkspacePersistence({
 					onWorkspaceRevisionChange(saved.revision);
 				} catch (error) {
 					if (error instanceof WorkspaceStateConflictError) {
+						// sked fork: do not adopt error.currentRevision here (sked_ai#4951, cline/kanban#674).
+						// The refetch below reloads the board only when the fetched revision differs from
+						// ours. Adopting it first made the reload a no-op, and the next save then wrote this
+						// stale board over the server's newer one. The local edit is dropped instead, and
+						// the conflict toast says so.
 						if (
 							requestId === latestPersistRequestIdRef.current &&
 							currentProjectIdRef.current === persistWorkspaceId
 						) {
-							onWorkspaceRevisionChange(error.currentRevision);
 							onWorkspaceStateConflict?.({
 								workspaceId: persistWorkspaceId,
 								currentRevision: error.currentRevision,

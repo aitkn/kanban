@@ -36,6 +36,11 @@ import {
 // shared repo, which can freeze or crash the runtime. Bound the fan-out instead.
 const CLEAR_TRASH_CLEANUP_CONCURRENCY = 4;
 
+function wasSessionStartedAfterTaskCreated(board: BoardData, summary: RuntimeTaskSessionSummary): boolean {
+	const card = findCardSelection(board, summary.taskId)?.card;
+	return card !== undefined && summary.startedAt !== null && summary.startedAt > card.createdAt;
+}
+
 interface TaskGitActionLoadingStateLike {
 	commitSource: string | null;
 	prSource: string | null;
@@ -467,6 +472,27 @@ export function useBoardInteractions({
 						continue;
 					}
 					const moved = moveTaskToColumn(nextBoard, summary.taskId, "in_progress", { insertAtTop: true });
+					if (moved.moved) {
+						nextBoard = moved.board;
+					}
+					continue;
+				}
+				// sked fork: re-apply a Start whose backlog -> in_progress move was dropped (sked_ai#4951).
+				// Start launches the agent whether or not that move is saved, and a conflict reload drops
+				// it. A card cannot be dragged into Backlog, so a Backlog card whose session started after
+				// the card was created is always a lost start. The startedAt check skips the never-pruned
+				// summaries of deleted cards, whose ids a new card can reuse.
+				if (
+					(summary.state === "running" || summary.state === "awaiting_review") &&
+					columnId === "backlog" &&
+					wasSessionStartedAfterTaskCreated(nextBoard, summary)
+				) {
+					const moved = moveTaskToColumn(
+						nextBoard,
+						summary.taskId,
+						summary.state === "running" ? "in_progress" : "review",
+						{ insertAtTop: true },
+					);
 					if (moved.moved) {
 						nextBoard = moved.board;
 					}
