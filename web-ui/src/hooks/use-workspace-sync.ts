@@ -11,6 +11,7 @@ import type {
 } from "@/runtime/types";
 import { fetchWorkspaceState } from "@/runtime/workspace-state-query";
 import { normalizeBoardData } from "@/state/board-state";
+import { recordConfirmedBoard } from "@/stores/board-persistence-confirmations";
 import type { BoardData } from "@/types";
 
 interface UseWorkspaceSyncInput {
@@ -115,6 +116,8 @@ export function useWorkspaceSync({
 			const shouldHydrateBoard = !isSameProject || currentRevision !== nextWorkspaceState.revision;
 			if (shouldHydrateBoard) {
 				const normalized = normalizeBoardData(nextWorkspaceState.board) ?? createInitialBoardData();
+				// sked fork: the reloaded board is what the server holds (sked_ai#4951).
+				recordConfirmedBoard(normalized, "reloaded");
 				setBoard(normalized);
 				setWorkspaceHydrationNonce((current) => current + 1);
 			}

@@ -10,9 +10,26 @@ import {
 	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
 } from "@/state/board-state";
+import { waitForTaskDoneOnServer } from "@/stores/board-persistence-confirmations";
 import { trackTaskDependencyCreated, trackTasksAutoStartedFromDependency } from "@/telemetry/events";
 import type { BoardCard, BoardColumnId, BoardData } from "@/types";
 import { getNextDetailTaskIdAfterTrashMove } from "@/utils/detail-view-task-order";
+
+async function waitForMoveToDoneSaved(task: BoardCard): Promise<boolean> {
+	if (await waitForTaskDoneOnServer(task.id)) {
+		return true;
+	}
+	showAppToast(
+		{
+			intent: "warning",
+			icon: "warning-sign",
+			message: `"${task.title}" was not moved to Done: the board changed before the move was saved. Its session and worktree were left alone. Move it again.`,
+			timeout: 10000,
+		},
+		`move-to-done-not-saved-${task.id}`,
+	);
+	return false;
+}
 
 interface RequestMoveTaskToTrashOptions {
 	optimisticMoveApplied?: boolean;
@@ -107,6 +124,9 @@ export function useLinkedBacklogTaskActions({
 			const boardBeforeTrash = currentBoard ?? boardRef.current;
 			const trashed = trashTaskAndGetReadyLinkedTaskIds(boardBeforeTrash, task.id);
 			if (!trashed.moved) {
+				if (!(await waitForMoveToDoneSaved(task))) {
+					return;
+				}
 				await stopTaskSession(task.id);
 				await cleanupTaskWorkspace(task.id);
 				return;
@@ -121,6 +141,12 @@ export function useLinkedBacklogTaskActions({
 					? getNextDetailTaskIdAfterTrashMove(boardBeforeTrash, task.id)
 					: currentSelectedTaskId,
 			);
+
+			// sked fork: stop, clean up and auto-start nothing until the server has the move
+			// (sked_ai#4951). The CLI's `task trash` saves first for the same reason.
+			if (!(await waitForMoveToDoneSaved(task))) {
+				return;
+			}
 
 			const readyTasks = trashed.readyTaskIds
 				.map((readyTaskId) => findCardSelection(trashed.board, readyTaskId)?.card ?? null)

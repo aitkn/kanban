@@ -8,6 +8,16 @@ import type { BoardCard, BoardData, BoardDependency } from "@/types";
 
 const trackTaskDependencyCreatedMock = vi.hoisted(() => vi.fn());
 const trackTasksAutoStartedFromDependencyMock = vi.hoisted(() => vi.fn());
+const waitForTaskDoneOnServerMock = vi.hoisted(() => vi.fn(async (_taskId: string) => true));
+const showAppToastMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/stores/board-persistence-confirmations", () => ({
+	waitForTaskDoneOnServer: waitForTaskDoneOnServerMock,
+}));
+
+vi.mock("@/components/app-toaster", () => ({
+	showAppToast: showAppToastMock,
+}));
 
 vi.mock("@/telemetry/events", () => ({
 	trackTaskDependencyCreated: trackTaskDependencyCreatedMock,
@@ -132,6 +142,9 @@ describe("useLinkedBacklogTaskActions", () => {
 	beforeEach(() => {
 		trackTaskDependencyCreatedMock.mockReset();
 		trackTasksAutoStartedFromDependencyMock.mockReset();
+		waitForTaskDoneOnServerMock.mockReset();
+		waitForTaskDoneOnServerMock.mockImplementation(async () => true);
+		showAppToastMock.mockReset();
 		previousActEnvironment = (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
 			.IS_REACT_ACT_ENVIRONMENT;
 		(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -404,5 +417,89 @@ describe("useLinkedBacklogTaskActions", () => {
 		});
 
 		expect(trackTasksAutoStartedFromDependencyMock).toHaveBeenCalledWith(2);
+	});
+	it("stops, cleans up and auto-starts nothing until the server has the move to Done", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const saved = createDeferred<boolean>();
+		waitForTaskDoneOnServerMock.mockImplementation(() => saved.promise);
+		const stopTaskSession = vi.fn(async (_taskId: string) => {});
+		const cleanupTaskWorkspace = vi.fn(async (_taskId: string) => null);
+		const kickoffTaskInProgress = vi.fn(async () => true);
+		const boardFactory = () =>
+			createBoard([{ id: "dep-1", fromTaskId: "task-1", toTaskId: "task-2", createdAt: 10 }]);
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					boardFactory={boardFactory}
+					stopTaskSession={stopTaskSession}
+					cleanupTaskWorkspace={cleanupTaskWorkspace}
+					kickoffTaskInProgress={kickoffTaskInProgress}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+		const initialSnapshot = latestSnapshot as unknown as HookSnapshot;
+
+		let movePromise: Promise<void> | null = null;
+		await act(async () => {
+			movePromise = initialSnapshot.requestMoveTaskToTrash("task-2", "review");
+			await Promise.resolve();
+		});
+
+		expect(waitForTaskDoneOnServerMock).toHaveBeenCalledWith("task-2");
+		expect(
+			(latestSnapshot as unknown as HookSnapshot).board.columns.find((c) => c.id === "trash")?.cards[0]?.id,
+		).toBe("task-2");
+		expect(stopTaskSession).not.toHaveBeenCalled();
+		expect(cleanupTaskWorkspace).not.toHaveBeenCalled();
+		expect(kickoffTaskInProgress).not.toHaveBeenCalled();
+
+		await act(async () => {
+			saved.resolve(true);
+			await movePromise;
+		});
+
+		expect(kickoffTaskInProgress).toHaveBeenCalledTimes(1);
+		expect(stopTaskSession).toHaveBeenCalledWith("task-2");
+		expect(cleanupTaskWorkspace).toHaveBeenCalledWith("task-2");
+	});
+
+	it("leaves the session and worktree alone and warns when the move to Done is not saved", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		waitForTaskDoneOnServerMock.mockImplementation(async () => false);
+		const stopTaskSession = vi.fn(async (_taskId: string) => {});
+		const cleanupTaskWorkspace = vi.fn(async (_taskId: string) => null);
+		const kickoffTaskInProgress = vi.fn(async () => true);
+		const boardFactory = () =>
+			createBoard([{ id: "dep-1", fromTaskId: "task-1", toTaskId: "task-2", createdAt: 10 }]);
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					boardFactory={boardFactory}
+					stopTaskSession={stopTaskSession}
+					cleanupTaskWorkspace={cleanupTaskWorkspace}
+					kickoffTaskInProgress={kickoffTaskInProgress}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+		const initialSnapshot = latestSnapshot as unknown as HookSnapshot;
+
+		await act(async () => {
+			await initialSnapshot.requestMoveTaskToTrash("task-2", "review");
+		});
+
+		expect(stopTaskSession).not.toHaveBeenCalled();
+		expect(cleanupTaskWorkspace).not.toHaveBeenCalled();
+		expect(kickoffTaskInProgress).not.toHaveBeenCalled();
+		expect(trackTasksAutoStartedFromDependencyMock).not.toHaveBeenCalled();
+		expect(showAppToastMock).toHaveBeenCalledTimes(1);
+		expect(showAppToastMock.mock.calls[0]?.[0]).toMatchObject({ intent: "warning" });
 	});
 });

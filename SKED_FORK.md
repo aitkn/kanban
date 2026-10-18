@@ -10,8 +10,8 @@ Download the tarball from the newest release on
 replaces the official `kanban` command:
 
 ```bash
-npm i -g https://github.com/aitkn/kanban/releases/download/v0.1.70-sked.1/kanban-0.1.70-sked.1.tgz
-kanban --version   # 0.1.70-sked.1
+npm i -g https://github.com/aitkn/kanban/releases/download/v0.1.70-sked.2/kanban-0.1.70-sked.2.tgz
+kanban --version   # 0.1.70-sked.2
 ```
 
 To go back to the official build: `npm i -g kanban@latest`.
@@ -29,6 +29,16 @@ instead. To upgrade, install the newer release tarball.
 | Card detail view diff poll (`web-ui/src/components/card-detail-view.tsx`) | every 1s | off |
 | Self-update (`src/update/update.ts`) | from npm on startup | off for `-sked.N` versions |
 | Autonomous Claude cards (`src/terminal/agent-session-adapters.ts`) | `--permission-mode auto` | same, unless `KANBAN_CLAUDE_SKIP_PERMISSIONS=1` |
+| Board save conflict (`web-ui/src/runtime/use-workspace-persistence.ts`) | adopts the server revision, skips the reload, then saves the stale board over the server's | reloads the server board and drops the local edit, with the existing toast |
+| Move to Done (`web-ui/src/hooks/use-linked-backlog-task-actions.ts`, `web-ui/src/stores/board-persistence-confirmations.ts`) | stops the session and deletes the worktree before the move is saved | waits until the server has the move; if it is lost, touches nothing and warns |
+| Lost Start (`web-ui/src/hooks/use-board-interactions.ts`) | a Start dropped by a conflict leaves the agent running on a Backlog card | the card moves beside its session (only for a session started after the card was created) |
+
+### Board writes under load
+
+The three board rows above fix lost board writes: a CLI-created card vanishing, a deleted card
+coming back, and a card moved to Done jumping back to Review with its session and worktree
+gone. Reported upstream as [cline/kanban#674](https://github.com/cline/kanban/issues/674), tracked
+as sked_ai#4951.
 
 ### `KANBAN_CLAUDE_SKIP_PERMISSIONS`
 
