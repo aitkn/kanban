@@ -10,8 +10,8 @@ Download the tarball from the newest release on
 replaces the official `kanban` command:
 
 ```bash
-npm i -g https://github.com/aitkn/kanban/releases/download/v0.1.70-sked.2/kanban-0.1.70-sked.2.tgz
-kanban --version   # 0.1.70-sked.2
+npm i -g https://github.com/aitkn/kanban/releases/download/v0.1.70-sked.3/kanban-0.1.70-sked.3.tgz
+kanban --version   # 0.1.70-sked.3
 ```
 
 To go back to the official build: `npm i -g kanban@latest`.
