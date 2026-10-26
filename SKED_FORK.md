@@ -32,6 +32,7 @@ instead. To upgrade, install the newer release tarball.
 | Board save conflict (`web-ui/src/runtime/use-workspace-persistence.ts`) | adopts the server revision, skips the reload, then saves the stale board over the server's | reloads the server board and drops the local edit, with the existing toast |
 | Move to Done (`web-ui/src/hooks/use-linked-backlog-task-actions.ts`, `web-ui/src/stores/board-persistence-confirmations.ts`) | stops the session and deletes the worktree before the move is saved | waits until the server has the move; if it is lost, touches nothing and warns |
 | Lost Start (`web-ui/src/hooks/use-board-interactions.ts`) | a Start dropped by a conflict leaves the agent running on a Backlog card | the card moves beside its session (only for a session started after the card was created) |
+| Hidden agent terminals (`web-ui/src/terminal/persistent-terminal-manager.ts`, `web-ui/src/hooks/use-persistent-terminal-cleanup.ts`) | every card terminal a tab has shown stays connected and keeps parsing output until refresh | the shown terminal, the sidebar agent and the 3 most recently hidden stay connected; older ones close and restore from the server when reopened; a card's hidden terminals close when it leaves In Progress/Review |
 
 ### Board writes under load
 
@@ -39,6 +40,16 @@ The three board rows above fix lost board writes: a CLI-created card vanishing, 
 coming back, and a card moved to Done jumping back to Review with its session and worktree
 gone. Reported upstream as [cline/kanban#674](https://github.com/cline/kanban/issues/674), tracked
 as sked_ai#4951.
+
+### Hidden agent terminals
+
+Upstream keeps every card terminal a tab has shown connected: each one holds two WebSockets and
+parses its agent's full TUI output on the main thread. A tab got slower with every card viewed until
+it was refreshed, and with enough cards it could run out of browser WebSockets, at which point the
+board stream could not reconnect and cards stopped showing. The fork caps hidden terminals at
+`MAX_PARKED_PERSISTENT_TERMINALS` (3). Reopening a closed one replays the server's copy of the screen
+and its 10,000-line scrollback. Text that only ever lived in the browser is not replayed: a
+local Clear, the `[kanban] session exited` line, and the scroll position.
 
 ### `KANBAN_CLAUDE_SKIP_PERMISSIONS`
 

@@ -177,6 +177,7 @@ export function useHomeSidebarAgentPanel({
 				key={taskId}
 				taskId={taskId}
 				workspaceId={currentProjectId}
+				keepConnectedWhenHidden
 				summary={homeAgentPanelSummary}
 				onSummary={upsertSessionSummary}
 				showSessionToolbar={false}
