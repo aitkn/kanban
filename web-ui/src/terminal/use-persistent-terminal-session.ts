@@ -10,6 +10,7 @@ interface UsePersistentTerminalSessionInput {
 	taskId: string;
 	workspaceId: string | null;
 	enabled?: boolean;
+	keepConnectedWhenHidden?: boolean;
 	onSummary?: (summary: RuntimeTaskSessionSummary) => void;
 	onConnectionReady?: (taskId: string) => void;
 	autoFocus?: boolean;
@@ -31,6 +32,7 @@ export function usePersistentTerminalSession({
 	taskId,
 	workspaceId,
 	enabled = true,
+	keepConnectedWhenHidden = false,
 	onSummary,
 	onConnectionReady,
 	autoFocus = false,
@@ -104,6 +106,7 @@ export function usePersistentTerminalSession({
 			cursorColor,
 			terminalBackgroundColor,
 			themeColors,
+			keepConnectedWhenHidden,
 		});
 		if (didSessionRestart) {
 			terminal.reset();
@@ -149,6 +152,7 @@ export function usePersistentTerminalSession({
 		cursorColor,
 		enabled,
 		isVisible,
+		keepConnectedWhenHidden,
 		sessionStartedAt,
 		taskId,
 		terminalBackgroundColor,

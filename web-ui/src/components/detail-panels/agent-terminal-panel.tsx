@@ -24,6 +24,8 @@ export interface AgentTerminalPanelProps {
 	taskId: string;
 	workspaceId: string | null;
 	terminalEnabled?: boolean;
+	// Exempts this terminal from the parked-terminal limit, for one long-lived per-project terminal.
+	keepConnectedWhenHidden?: boolean;
 	summary: RuntimeTaskSessionSummary | null;
 	onSummary?: (summary: RuntimeTaskSessionSummary) => void;
 	onCommit?: () => void;
@@ -345,6 +347,7 @@ export function AgentTerminalPanel(props: AgentTerminalPanelProps): ReactElement
 		taskId: props.taskId,
 		workspaceId: props.workspaceId,
 		enabled: props.terminalEnabled ?? true,
+		keepConnectedWhenHidden: props.keepConnectedWhenHidden,
 		onSummary: props.onSummary,
 		onConnectionReady: props.onConnectionReady,
 		autoFocus: props.autoFocus,

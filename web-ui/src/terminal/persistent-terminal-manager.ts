@@ -25,6 +25,11 @@ const SHIFT_ENTER_SEQUENCE = "\n";
 const RESIZE_DEBOUNCE_MS = 50;
 const INTERRUPT_IDLE_SETTLE_MS = 250;
 const PARKING_ROOT_ID = "kb-persistent-terminal-parking-root";
+// sked fork: a parked terminal keeps both of its sockets open and keeps parsing its task's output,
+// so caching every terminal a tab has shown made the tab slower with each card viewed and could use
+// up the browser's WebSocket budget. Only this many parked terminals are kept, most recently shown
+// first; older ones are disposed and restore their screen from the server when shown again.
+export const MAX_PARKED_PERSISTENT_TERMINALS = 3;
 
 interface PersistentTerminalAppearance {
 	cursorColor: string;
@@ -47,6 +52,9 @@ interface MountPersistentTerminalOptions {
 interface EnsurePersistentTerminalInput extends PersistentTerminalAppearance {
 	taskId: string;
 	workspaceId: string;
+	// Exempt from MAX_PARKED_PERSISTENT_TERMINALS. Only for terminals bounded per project, like the
+	// sidebar agent, which unmounts whenever a card is open.
+	keepConnectedWhenHidden?: boolean;
 }
 
 function generateTerminalClientId(): string {
@@ -162,11 +170,13 @@ class PersistentTerminal {
 	private outputTextDecoder = new TextDecoder();
 	private terminalWriteQueue: Promise<void> = Promise.resolve();
 	private disposed = false;
+	keepConnectedWhenHidden = false;
 
 	constructor(
 		private readonly taskId: string,
 		private readonly workspaceId: string,
 		appearance: PersistentTerminalAppearance,
+		private readonly onMountedChange: () => void,
 	) {
 		this.appearance = appearance;
 		this.parkingRoot = getParkingRoot();
@@ -501,6 +511,10 @@ class PersistentTerminal {
 		};
 	}
 
+	get isMounted(): boolean {
+		return this.visibleContainer !== null;
+	}
+
 	setAppearance(appearance: PersistentTerminalAppearance): void {
 		this.updateAppearance(appearance);
 	}
@@ -546,6 +560,7 @@ class PersistentTerminal {
 			}, RESIZE_DEBOUNCE_MS);
 		});
 		this.resizeObserver.observe(container);
+		this.onMountedChange();
 		if (options.isVisible !== false) {
 			window.requestAnimationFrame(() => {
 				this.requestResize();
@@ -571,9 +586,13 @@ class PersistentTerminal {
 		if (container && this.visibleContainer !== container) {
 			return;
 		}
+		const wasMounted = this.visibleContainer !== null;
 		this.visibleContainer = null;
 		clearTerminalGeometry(this.taskId);
 		this.parkingRoot.appendChild(this.hostElement);
+		if (wasMounted && !this.disposed) {
+			this.onMountedChange();
+		}
 	}
 
 	focus(): void {
@@ -696,20 +715,54 @@ class PersistentTerminal {
 	}
 }
 
+// Iteration order is least recently mounted or parked first.
 const terminals = new Map<string, PersistentTerminal>();
+
+function markRecentlyUsed(key: string, terminal: PersistentTerminal): void {
+	terminals.delete(key);
+	terminals.set(key, terminal);
+}
+
+function disposeTerminalEntry(key: string, terminal: PersistentTerminal): void {
+	terminals.delete(key);
+	terminal.dispose();
+}
+
+function evictStaleParkedTerminals(): void {
+	const parked = [...terminals.entries()].filter(
+		([, terminal]) => !terminal.isMounted && !terminal.keepConnectedWhenHidden,
+	);
+	const excessCount = parked.length - MAX_PARKED_PERSISTENT_TERMINALS;
+	for (const [key, terminal] of parked.slice(0, Math.max(0, excessCount))) {
+		disposeTerminalEntry(key, terminal);
+	}
+}
 
 export function ensurePersistentTerminal(input: EnsurePersistentTerminalInput): PersistentTerminal {
 	const key = buildKey(input.workspaceId, input.taskId);
-	let terminal = terminals.get(key);
+	const terminal = terminals.get(key);
 	if (!terminal) {
-		terminal = new PersistentTerminal(input.taskId, input.workspaceId, {
-			cursorColor: input.cursorColor,
-			terminalBackgroundColor: input.terminalBackgroundColor,
-			themeColors: input.themeColors,
-		});
-		terminals.set(key, terminal);
-		return terminal;
+		const created = new PersistentTerminal(
+			input.taskId,
+			input.workspaceId,
+			{
+				cursorColor: input.cursorColor,
+				terminalBackgroundColor: input.terminalBackgroundColor,
+				themeColors: input.themeColors,
+			},
+			() => {
+				if (terminals.get(key) !== created) {
+					return;
+				}
+				markRecentlyUsed(key, created);
+				evictStaleParkedTerminals();
+			},
+		);
+		created.keepConnectedWhenHidden = input.keepConnectedWhenHidden ?? false;
+		terminals.set(key, created);
+		return created;
 	}
+	terminal.keepConnectedWhenHidden = input.keepConnectedWhenHidden ?? false;
 	terminal.setAppearance({
 		cursorColor: input.cursorColor,
 		terminalBackgroundColor: input.terminalBackgroundColor,
@@ -724,16 +777,17 @@ export function disposePersistentTerminal(workspaceId: string, taskId: string): 
 	if (!terminal) {
 		return;
 	}
-	terminal.dispose();
-	terminals.delete(key);
+	disposeTerminalEntry(key, terminal);
 }
 
-export function disposeAllPersistentTerminalsForWorkspace(workspaceId: string): void {
-	for (const [key, terminal] of terminals.entries()) {
-		if (!key.startsWith(`${workspaceId}:`)) {
+// Disposes the workspace's parked terminals, or only those for taskIds when given.
+// A terminal still mounted in a panel is left to that panel.
+export function disposeParkedPersistentTerminals(workspaceId: string, taskIds?: Iterable<string>): void {
+	const keys = taskIds ? new Set([...taskIds].map((taskId) => buildKey(workspaceId, taskId))) : null;
+	for (const [key, terminal] of [...terminals.entries()]) {
+		if (terminal.isMounted || !key.startsWith(`${workspaceId}:`) || (keys && !keys.has(key))) {
 			continue;
 		}
-		terminal.dispose();
-		terminals.delete(key);
+		disposeTerminalEntry(key, terminal);
 	}
 }
