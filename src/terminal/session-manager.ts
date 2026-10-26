@@ -23,7 +23,8 @@ import {
 } from "./claude-workspace-trust";
 import { hasCodexWorkspaceTrustPrompt, shouldAutoConfirmCodexWorkspaceTrust } from "./codex-workspace-trust";
 import { stripAnsi } from "./output-utils";
-import { PtySession } from "./pty-session";
+import { type DetachedPtySession, inProcessPtyBackend, type PtyBackend, type PtyProcess } from "./pty-backend";
+import type { PtyExitEvent } from "./pty-session";
 import { reduceSessionTransition, type SessionTransitionEvent } from "./session-state-machine";
 import {
 	createTerminalProtocolFilterState,
@@ -49,7 +50,7 @@ type RestartableSessionRequest =
 	| { kind: "shell"; request: StartShellSessionRequest };
 
 interface ActiveProcessState {
-	session: PtySession;
+	session: PtyProcess;
 	workspaceTrustBuffer: string | null;
 	cols: number;
 	rows: number;
@@ -100,6 +101,40 @@ export interface StartShellSessionRequest {
 	binary: string;
 	args?: string[];
 	env?: Record<string, string | undefined>;
+}
+
+export interface TerminalSessionManagerOptions {
+	ptyBackend?: PtyBackend;
+	// Scopes this manager's sessions in a shared PTY host; the workspace id in the runtime.
+	namespace?: string;
+}
+
+// sked fork: stored with each PTY in the host so a restarted runtime can rebuild the session.
+type PtySessionMeta = (
+	| { kind: "task"; request: StartTaskSessionRequest }
+	| { kind: "shell"; request: StartShellSessionRequest }
+) & { startedAt: number };
+
+function createPtySessionMeta(
+	session: { kind: "task"; request: StartTaskSessionRequest } | { kind: "shell"; request: StartShellSessionRequest },
+	startedAt: number,
+): PtySessionMeta {
+	// Task images can be megabytes of base64; the host does not need them to keep the agent running.
+	const request = session.kind === "task" ? { ...session.request, images: undefined } : session.request;
+	return { ...session, request, startedAt } as PtySessionMeta;
+}
+
+function isPtySessionMeta(value: unknown): value is PtySessionMeta {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const candidate = value as Partial<PtySessionMeta>;
+	return (
+		(candidate.kind === "task" || candidate.kind === "shell") &&
+		typeof candidate.startedAt === "number" &&
+		typeof candidate.request === "object" &&
+		candidate.request !== null
+	);
 }
 
 function now(): number {
@@ -205,6 +240,13 @@ function hasCodexStartupUiRendered(text: string): boolean {
 export class TerminalSessionManager implements TerminalSessionService {
 	private readonly entries = new Map<string, SessionEntry>();
 	private readonly summaryListeners = new Set<(summary: RuntimeTaskSessionSummary) => void>();
+	private readonly ptyBackend: PtyBackend;
+	private readonly namespace: string;
+
+	constructor(options: TerminalSessionManagerOptions = {}) {
+		this.ptyBackend = options.ptyBackend ?? inProcessPtyBackend;
+		this.namespace = options.namespace ?? "default";
+	}
 
 	private trySendDeferredCodexStartupInput(taskId: string): boolean {
 		const entry = this.entries.get(taskId);
@@ -256,6 +298,133 @@ export class TerminalSessionManager implements TerminalSessionService {
 				pendingAutoRestart: null,
 			});
 		}
+	}
+
+	// sked fork: takes over the PTYs a previous runtime left running in the PTY host. Call after
+	// hydrateFromRecord and before serving the workspace, so their cards are never seen as stale.
+	async reattachDetachedSessions(): Promise<number> {
+		let detached: DetachedPtySession[];
+		try {
+			detached = await this.ptyBackend.listDetachedSessions(this.namespace);
+		} catch {
+			return 0;
+		}
+		const newestByTaskId = new Map<string, { session: DetachedPtySession; meta: PtySessionMeta }>();
+		const superseded: DetachedPtySession[] = [];
+		for (const session of detached) {
+			if (!isPtySessionMeta(session.meta)) {
+				continue;
+			}
+			const current = newestByTaskId.get(session.taskId);
+			if (current && current.meta.startedAt >= session.meta.startedAt) {
+				superseded.push(session);
+				continue;
+			}
+			if (current) {
+				superseded.push(current.session);
+			}
+			newestByTaskId.set(session.taskId, { session, meta: session.meta });
+		}
+		let reattached = 0;
+		for (const { session, meta } of newestByTaskId.values()) {
+			if (await this.reattachSession(session, meta)) {
+				reattached += 1;
+			}
+		}
+		// A runtime that died between stopping a session and starting its replacement leaves the old one behind.
+		for (const session of superseded) {
+			try {
+				const attached = await this.ptyBackend.attach(session.id, {});
+				attached.process.stop();
+			} catch {
+				// Already gone.
+			}
+		}
+		return reattached;
+	}
+
+	private async reattachSession(detached: DetachedPtySession, meta: PtySessionMeta): Promise<boolean> {
+		const taskId = detached.taskId;
+		const entry = this.ensureEntry(taskId);
+		if (entry.active) {
+			return false;
+		}
+		let attached: Awaited<ReturnType<PtyBackend["attach"]>>;
+		try {
+			attached = await this.ptyBackend.attach(detached.id, {
+				onData: (chunk) => {
+					if (meta.kind === "task") {
+						this.handleTaskOutput(entry, taskId, chunk);
+					} else {
+						this.handleShellOutput(entry, chunk);
+					}
+				},
+				onExit: (event) => {
+					if (meta.kind === "task") {
+						this.handleTaskExit(taskId, event);
+					} else {
+						this.handleShellExit(taskId, event);
+					}
+				},
+			});
+		} catch {
+			return false;
+		}
+		if (entry.active) {
+			attached.process.stop();
+			return false;
+		}
+
+		entry.terminalStateMirror?.dispose();
+		const terminalStateMirror = new TerminalStateMirror(attached.cols, attached.rows, {
+			onInputResponse: (data) => {
+				if (!entry.active || this.hasLiveOutputListener(entry)) {
+					return;
+				}
+				entry.active.session.write(data);
+			},
+		});
+		terminalStateMirror.applyOutput(Buffer.from(attached.snapshot, "utf8"));
+		entry.terminalStateMirror = terminalStateMirror;
+		entry.restartRequest =
+			meta.kind === "task"
+				? { kind: "task", request: cloneStartTaskSessionRequest(meta.request) }
+				: { kind: "shell", request: cloneStartShellSessionRequest(meta.request) };
+		entry.active = {
+			session: attached.process,
+			workspaceTrustBuffer: null,
+			cols: attached.cols,
+			rows: attached.rows,
+			terminalProtocolFilter: createTerminalProtocolFilterState({
+				interceptOscColorQueries: true,
+				suppressDeviceAttributeQueries: meta.kind === "task" && meta.request.agentId === "droid",
+			}),
+			onSessionCleanup: null,
+			deferredStartupInput: null,
+			detectOutputTransition: null,
+			shouldInspectOutputForTransition: null,
+			awaitingCodexPromptAfterEnter: false,
+			autoConfirmedWorkspaceTrust: false,
+			workspaceTrustConfirmTimer: null,
+		};
+
+		// The persisted summary is whatever the browser last saved. Keep a review state it recorded;
+		// otherwise the process is alive, so it is running.
+		const keepState = meta.kind === "task" ? isActiveState(entry.summary.state) : entry.summary.state === "running";
+		const summary = updateSummary(entry, {
+			state: keepState ? entry.summary.state : "running",
+			reviewReason: keepState ? entry.summary.reviewReason : null,
+			agentId: meta.kind === "task" ? meta.request.agentId : null,
+			workspacePath: meta.request.cwd,
+			pid: attached.process.pid,
+			startedAt: meta.startedAt,
+			exitCode: null,
+		});
+		for (const listener of entry.listeners.values()) {
+			listener.onState?.(cloneSummary(summary));
+		}
+		this.emitSummary(summary);
+		return true;
 	}
 
 	getSummary(taskId: string): RuntimeTaskSessionSummary | null {
@@ -345,9 +514,13 @@ export class TerminalSessionManager implements TerminalSessionService {
 		const hasCodexLaunchSignature = [commandBinary, ...commandArgs].some((part) =>
 			part.toLowerCase().includes("codex"),
 		);
-		let session: PtySession;
+		const startedAt = now();
+		let session: PtyProcess;
 		try {
-			session = PtySession.spawn({
+			session = await this.ptyBackend.spawn({
+				namespace: this.namespace,
+				taskId: request.taskId,
+				meta: createPtySessionMeta({ kind: "task", request: cloneStartTaskSessionRequest(request) }, startedAt),
 				binary: commandBinary,
 				args: commandArgs,
 				cwd: request.cwd,
@@ -355,128 +528,10 @@ export class TerminalSessionManager implements TerminalSessionService {
 				cols,
 				rows,
 				onData: (chunk) => {
-					if (!entry.active) {
-						return;
-					}
-
-					const filteredChunk = filterTerminalProtocolOutput(entry.active.terminalProtocolFilter, chunk, {
-						onOsc10ForegroundQuery: () => entry.active?.session.write(OSC_FOREGROUND_QUERY_REPLY),
-						onOsc11BackgroundQuery: () => entry.active?.session.write(OSC_BACKGROUND_QUERY_REPLY),
-					});
-					if (filteredChunk.byteLength === 0) {
-						return;
-					}
-					entry.terminalStateMirror?.applyOutput(filteredChunk);
-
-					const needsDecodedOutput =
-						entry.active.workspaceTrustBuffer !== null ||
-						(entry.active.detectOutputTransition !== null &&
-							(entry.active.shouldInspectOutputForTransition?.(entry.summary) ?? true));
-					const data = needsDecodedOutput ? filteredChunk.toString("utf8") : "";
-
-					if (entry.active.workspaceTrustBuffer !== null) {
-						entry.active.workspaceTrustBuffer += data;
-						if (entry.active.workspaceTrustBuffer.length > MAX_WORKSPACE_TRUST_BUFFER_CHARS) {
-							entry.active.workspaceTrustBuffer = entry.active.workspaceTrustBuffer.slice(
-								-MAX_WORKSPACE_TRUST_BUFFER_CHARS,
-							);
-						}
-						if (!entry.active.autoConfirmedWorkspaceTrust && entry.active.workspaceTrustConfirmTimer === null) {
-							const hasClaudePrompt = hasClaudeWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
-							const hasCodexPrompt = hasCodexWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
-							if (hasClaudePrompt || hasCodexPrompt) {
-								entry.active.autoConfirmedWorkspaceTrust = true;
-								const trustConfirmDelayMs = WORKSPACE_TRUST_CONFIRM_DELAY_MS;
-								entry.active.workspaceTrustConfirmTimer = setTimeout(() => {
-									const activeEntry = this.entries.get(request.taskId)?.active;
-									if (!activeEntry || !activeEntry.autoConfirmedWorkspaceTrust) {
-										return;
-									}
-									activeEntry.session.write("\r");
-									// Trust text can remain in the rolling buffer after we auto-confirm.
-									// Clear it so later startup/prompt checks do not match stale trust output.
-									if (activeEntry.workspaceTrustBuffer !== null) {
-										activeEntry.workspaceTrustBuffer = "";
-									}
-									activeEntry.workspaceTrustConfirmTimer = null;
-								}, trustConfirmDelayMs);
-							}
-						}
-					}
-					updateSummary(entry, { lastOutputAt: now() });
-
-					// Codex plan-mode startup input is deferred until we know the TUI rendered.
-					// Trigger on either the interactive prompt marker or the startup header text.
-					if (
-						entry.summary.agentId === "codex" &&
-						entry.active.deferredStartupInput !== null &&
-						data.length > 0 &&
-						(hasCodexInteractivePrompt(data) ||
-							hasCodexStartupUiRendered(data) ||
-							(entry.active.workspaceTrustBuffer !== null &&
-								(hasCodexInteractivePrompt(entry.active.workspaceTrustBuffer) ||
-									hasCodexStartupUiRendered(entry.active.workspaceTrustBuffer))))
-					) {
-						this.trySendDeferredCodexStartupInput(request.taskId);
-					}
-
-					const adapterEvent = entry.active.detectOutputTransition?.(data, entry.summary) ?? null;
-					if (adapterEvent) {
-						const requiresEnterForCodex =
-							adapterEvent.type === "agent.prompt-ready" &&
-							entry.summary.agentId === "codex" &&
-							!entry.active.awaitingCodexPromptAfterEnter;
-						if (!requiresEnterForCodex) {
-							const summary = this.applySessionEvent(entry, adapterEvent);
-							if (adapterEvent.type === "agent.prompt-ready" && entry.summary.agentId === "codex") {
-								entry.active.awaitingCodexPromptAfterEnter = false;
-							}
-							for (const taskListener of entry.listeners.values()) {
-								taskListener.onState?.(cloneSummary(summary));
-							}
-							this.emitSummary(summary);
-						}
-					}
-
-					for (const taskListener of entry.listeners.values()) {
-						taskListener.onOutput?.(filteredChunk);
-					}
+					this.handleTaskOutput(entry, request.taskId, chunk);
 				},
 				onExit: (event) => {
-					const currentEntry = this.entries.get(request.taskId);
-					if (!currentEntry) {
-						return;
-					}
-					const currentActive = currentEntry.active;
-					if (!currentActive) {
-						return;
-					}
-					stopWorkspaceTrustTimers(currentActive);
-
-					const summary = this.applySessionEvent(currentEntry, {
-						type: "process.exit",
-						exitCode: event.exitCode,
-						interrupted: currentActive.session.wasInterrupted(),
-					});
-					const shouldAutoRestart = this.shouldAutoRestart(currentEntry);
-
-					for (const taskListener of currentEntry.listeners.values()) {
-						taskListener.onState?.(cloneSummary(summary));
-						taskListener.onExit?.(event.exitCode);
-					}
-					currentEntry.active = null;
-					this.emitSummary(summary);
-					if (shouldAutoRestart) {
-						this.scheduleAutoRestart(currentEntry);
-					}
-
-					const cleanupFn = currentActive.onSessionCleanup;
-					currentActive.onSessionCleanup = null;
-					if (cleanupFn) {
-						cleanupFn().catch(() => {
-							// Best effort: cleanup failure is non-critical.
-						});
-					}
+					this.handleTaskExit(request.taskId, event);
 				},
 			});
 		} catch (error) {
@@ -529,7 +584,6 @@ export class TerminalSessionManager implements TerminalSessionService {
 		entry.active = active;
 		entry.terminalStateMirror = terminalStateMirror;
 
-		const startedAt = now();
 		updateSummary(entry, {
 			state: request.resumeFromTrash ? "awaiting_review" : "running",
 			agentId: request.agentId,
@@ -580,9 +634,13 @@ export class TerminalSessionManager implements TerminalSessionService {
 		});
 		const env = buildTerminalEnvironment(request.env);
 
-		let session: PtySession;
+		const startedAt = now();
+		let session: PtyProcess;
 		try {
-			session = PtySession.spawn({
+			session = await this.ptyBackend.spawn({
+				namespace: this.namespace,
+				taskId: request.taskId,
+				meta: createPtySessionMeta({ kind: "shell", request: cloneStartShellSessionRequest(request) }, startedAt),
 				binary: request.binary,
 				args: request.args ?? [],
 				cwd: request.cwd,
@@ -590,57 +648,10 @@ export class TerminalSessionManager implements TerminalSessionService {
 				cols,
 				rows,
 				onData: (chunk) => {
-					if (!entry.active) {
-						return;
-					}
-
-					const filteredChunk = filterTerminalProtocolOutput(entry.active.terminalProtocolFilter, chunk, {
-						onOsc10ForegroundQuery: () => entry.active?.session.write(OSC_FOREGROUND_QUERY_REPLY),
-						onOsc11BackgroundQuery: () => entry.active?.session.write(OSC_BACKGROUND_QUERY_REPLY),
-					});
-					if (filteredChunk.byteLength === 0) {
-						return;
-					}
-					entry.terminalStateMirror?.applyOutput(filteredChunk);
-
-					if (entry.active.workspaceTrustBuffer !== null) {
-						entry.active.workspaceTrustBuffer += filteredChunk.toString("utf8");
-						if (entry.active.workspaceTrustBuffer.length > MAX_WORKSPACE_TRUST_BUFFER_CHARS) {
-							entry.active.workspaceTrustBuffer = entry.active.workspaceTrustBuffer.slice(
-								-MAX_WORKSPACE_TRUST_BUFFER_CHARS,
-							);
-						}
-					}
-					updateSummary(entry, { lastOutputAt: now() });
-
-					for (const taskListener of entry.listeners.values()) {
-						taskListener.onOutput?.(filteredChunk);
-					}
+					this.handleShellOutput(entry, chunk);
 				},
 				onExit: (event) => {
-					const currentEntry = this.entries.get(request.taskId);
-					if (!currentEntry) {
-						return;
-					}
-					const currentActive = currentEntry.active;
-					if (!currentActive) {
-						return;
-					}
-					stopWorkspaceTrustTimers(currentActive);
-
-					const summary = updateSummary(currentEntry, {
-						state: currentActive.session.wasInterrupted() ? "interrupted" : "idle",
-						reviewReason: currentActive.session.wasInterrupted() ? "interrupted" : null,
-						exitCode: event.exitCode,
-						pid: null,
-					});
-
-					for (const taskListener of currentEntry.listeners.values()) {
-						taskListener.onState?.(cloneSummary(summary));
-						taskListener.onExit?.(event.exitCode);
-					}
-					currentEntry.active = null;
-					this.emitSummary(summary);
+					this.handleShellExit(request.taskId, event);
 				},
 			});
 		} catch (error) {
@@ -687,7 +698,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 			agentId: null,
 			workspacePath: request.cwd,
 			pid: session.pid,
-			startedAt: now(),
+			startedAt,
 			lastOutputAt: null,
 			reviewReason: null,
 			exitCode: null,
@@ -700,6 +711,187 @@ export class TerminalSessionManager implements TerminalSessionService {
 		this.emitSummary(entry.summary);
 
 		return cloneSummary(entry.summary);
+	}
+
+	private handleTaskOutput(entry: SessionEntry, taskId: string, chunk: Buffer): void {
+		if (!entry.active) {
+			return;
+		}
+
+		const filteredChunk = filterTerminalProtocolOutput(entry.active.terminalProtocolFilter, chunk, {
+			onOsc10ForegroundQuery: () => entry.active?.session.write(OSC_FOREGROUND_QUERY_REPLY),
+			onOsc11BackgroundQuery: () => entry.active?.session.write(OSC_BACKGROUND_QUERY_REPLY),
+		});
+		if (filteredChunk.byteLength === 0) {
+			return;
+		}
+		entry.terminalStateMirror?.applyOutput(filteredChunk);
+
+		const needsDecodedOutput =
+			entry.active.workspaceTrustBuffer !== null ||
+			(entry.active.detectOutputTransition !== null &&
+				(entry.active.shouldInspectOutputForTransition?.(entry.summary) ?? true));
+		const data = needsDecodedOutput ? filteredChunk.toString("utf8") : "";
+
+		if (entry.active.workspaceTrustBuffer !== null) {
+			entry.active.workspaceTrustBuffer += data;
+			if (entry.active.workspaceTrustBuffer.length > MAX_WORKSPACE_TRUST_BUFFER_CHARS) {
+				entry.active.workspaceTrustBuffer = entry.active.workspaceTrustBuffer.slice(
+					-MAX_WORKSPACE_TRUST_BUFFER_CHARS,
+				);
+			}
+			if (!entry.active.autoConfirmedWorkspaceTrust && entry.active.workspaceTrustConfirmTimer === null) {
+				const hasClaudePrompt = hasClaudeWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
+				const hasCodexPrompt = hasCodexWorkspaceTrustPrompt(entry.active.workspaceTrustBuffer);
+				if (hasClaudePrompt || hasCodexPrompt) {
+					entry.active.autoConfirmedWorkspaceTrust = true;
+					const trustConfirmDelayMs = WORKSPACE_TRUST_CONFIRM_DELAY_MS;
+					entry.active.workspaceTrustConfirmTimer = setTimeout(() => {
+						const activeEntry = this.entries.get(taskId)?.active;
+						if (!activeEntry || !activeEntry.autoConfirmedWorkspaceTrust) {
+							return;
+						}
+						activeEntry.session.write("\r");
+						// Trust text can remain in the rolling buffer after we auto-confirm.
+						// Clear it so later startup/prompt checks do not match stale trust output.
+						if (activeEntry.workspaceTrustBuffer !== null) {
+							activeEntry.workspaceTrustBuffer = "";
+						}
+						activeEntry.workspaceTrustConfirmTimer = null;
+					}, trustConfirmDelayMs);
+				}
+			}
+		}
+		updateSummary(entry, { lastOutputAt: now() });
+
+		// Codex plan-mode startup input is deferred until we know the TUI rendered.
+		// Trigger on either the interactive prompt marker or the startup header text.
+		if (
+			entry.summary.agentId === "codex" &&
+			entry.active.deferredStartupInput !== null &&
+			data.length > 0 &&
+			(hasCodexInteractivePrompt(data) ||
+				hasCodexStartupUiRendered(data) ||
+				(entry.active.workspaceTrustBuffer !== null &&
+					(hasCodexInteractivePrompt(entry.active.workspaceTrustBuffer) ||
+						hasCodexStartupUiRendered(entry.active.workspaceTrustBuffer))))
+		) {
+			this.trySendDeferredCodexStartupInput(taskId);
+		}
+
+		const adapterEvent = entry.active.detectOutputTransition?.(data, entry.summary) ?? null;
+		if (adapterEvent) {
+			const requiresEnterForCodex =
+				adapterEvent.type === "agent.prompt-ready" &&
+				entry.summary.agentId === "codex" &&
+				!entry.active.awaitingCodexPromptAfterEnter;
+			if (!requiresEnterForCodex) {
+				const summary = this.applySessionEvent(entry, adapterEvent);
+				if (adapterEvent.type === "agent.prompt-ready" && entry.summary.agentId === "codex") {
+					entry.active.awaitingCodexPromptAfterEnter = false;
+				}
+				for (const taskListener of entry.listeners.values()) {
+					taskListener.onState?.(cloneSummary(summary));
+				}
+				this.emitSummary(summary);
+			}
+		}
+
+		for (const taskListener of entry.listeners.values()) {
+			taskListener.onOutput?.(filteredChunk);
+		}
+	}
+
+	private handleTaskExit(taskId: string, event: PtyExitEvent): void {
+		const currentEntry = this.entries.get(taskId);
+		if (!currentEntry) {
+			return;
+		}
+		const currentActive = currentEntry.active;
+		if (!currentActive) {
+			return;
+		}
+		stopWorkspaceTrustTimers(currentActive);
+
+		const summary = this.applySessionEvent(currentEntry, {
+			type: "process.exit",
+			exitCode: event.exitCode,
+			interrupted: currentActive.session.wasInterrupted(),
+		});
+		const shouldAutoRestart = this.shouldAutoRestart(currentEntry);
+
+		for (const taskListener of currentEntry.listeners.values()) {
+			taskListener.onState?.(cloneSummary(summary));
+			taskListener.onExit?.(event.exitCode);
+		}
+		currentEntry.active = null;
+		this.emitSummary(summary);
+		if (shouldAutoRestart) {
+			this.scheduleAutoRestart(currentEntry);
+		}
+
+		const cleanupFn = currentActive.onSessionCleanup;
+		currentActive.onSessionCleanup = null;
+		if (cleanupFn) {
+			cleanupFn().catch(() => {
+				// Best effort: cleanup failure is non-critical.
+			});
+		}
+	}
+
+	private handleShellOutput(entry: SessionEntry, chunk: Buffer): void {
+		if (!entry.active) {
+			return;
+		}
+
+		const filteredChunk = filterTerminalProtocolOutput(entry.active.terminalProtocolFilter, chunk, {
+			onOsc10ForegroundQuery: () => entry.active?.session.write(OSC_FOREGROUND_QUERY_REPLY),
+			onOsc11BackgroundQuery: () => entry.active?.session.write(OSC_BACKGROUND_QUERY_REPLY),
+		});
+		if (filteredChunk.byteLength === 0) {
+			return;
+		}
+		entry.terminalStateMirror?.applyOutput(filteredChunk);
+
+		if (entry.active.workspaceTrustBuffer !== null) {
+			entry.active.workspaceTrustBuffer += filteredChunk.toString("utf8");
+			if (entry.active.workspaceTrustBuffer.length > MAX_WORKSPACE_TRUST_BUFFER_CHARS) {
+				entry.active.workspaceTrustBuffer = entry.active.workspaceTrustBuffer.slice(
+					-MAX_WORKSPACE_TRUST_BUFFER_CHARS,
+				);
+			}
+		}
+		updateSummary(entry, { lastOutputAt: now() });
+
+		for (const taskListener of entry.listeners.values()) {
+			taskListener.onOutput?.(filteredChunk);
+		}
+	}
+
+	private handleShellExit(taskId: string, event: PtyExitEvent): void {
+		const currentEntry = this.entries.get(taskId);
+		if (!currentEntry) {
+			return;
+		}
+		const currentActive = currentEntry.active;
+		if (!currentActive) {
+			return;
+		}
+		stopWorkspaceTrustTimers(currentActive);
+
+		const summary = updateSummary(currentEntry, {
+			state: currentActive.session.wasInterrupted() ? "interrupted" : "idle",
+			reviewReason: currentActive.session.wasInterrupted() ? "interrupted" : null,
+			exitCode: event.exitCode,
+			pid: null,
+		});
+
+		for (const taskListener of currentEntry.listeners.values()) {
+			taskListener.onState?.(cloneSummary(summary));
+			taskListener.onExit?.(event.exitCode);
+		}
+		currentEntry.active = null;
+		this.emitSummary(summary);
 	}
 
 	recoverStaleSession(taskId: string): RuntimeTaskSessionSummary | null {
@@ -937,6 +1129,9 @@ export class TerminalSessionManager implements TerminalSessionService {
 			if (!entry.active) {
 				continue;
 			}
+			// sked fork: a shutdown or project removal must not relaunch the agent from its exit handler.
+			// Upstream's relaunch died with the runtime; one started in the PTY host would outlive it.
+			entry.suppressAutoRestartOnExit = true;
 			stopWorkspaceTrustTimers(entry.active);
 			entry.active.session.stop({ interrupted: true });
 		}

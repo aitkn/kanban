@@ -396,6 +396,7 @@ async function startServer(): Promise<{
 		{ shutdownRuntimeServer },
 		{ collectProjectWorktreeTaskIdsForRemoval, createWorkspaceRegistry },
 		{ clearPendingUpdateNotification, getPendingUpdateNotification },
+		{ getRuntimePtyBackend },
 	] = await Promise.all([
 		import("./projects/project-path.js"),
 		import("./server/directory-picker.js"),
@@ -405,6 +406,7 @@ async function startServer(): Promise<{
 		import("./server/shutdown-coordinator.js"),
 		import("./server/workspace-registry.js"),
 		import("./update/update.js"),
+		import("./terminal/pty-host/pty-host-backend.js"),
 	]);
 	let runtimeStateHub: RuntimeStateHub | undefined;
 	const workspaceRegistry = await createWorkspaceRegistry({
@@ -416,6 +418,9 @@ async function startServer(): Promise<{
 		onTerminalManagerReady: (workspaceId, manager) => {
 			runtimeStateHub?.trackTerminalManager(workspaceId, manager);
 		},
+		ptyBackend: getRuntimePtyBackend((message) => {
+			console.warn(`[kanban] ${message}`);
+		}),
 	});
 	runtimeStateHub = createRuntimeStateHub({
 		workspaceRegistry,
