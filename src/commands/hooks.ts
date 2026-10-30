@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTRPCProxyClient, httpBatchLink, TRPCClientError } from "@trpc/client";
 import type { Command } from "commander";
-import type { RuntimeHookEvent, RuntimeTaskHookActivity } from "../core/api-contract";
+import type { RuntimeHookBackgroundWork, RuntimeHookEvent, RuntimeTaskHookActivity } from "../core/api-contract";
 import { buildKanbanCommandParts } from "../core/kanban-command";
 import { buildKanbanRuntimeUrl, getRuntimeFetch } from "../core/runtime-endpoint";
 import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLaunch } from "../core/windows-cmd-launch";
 import { parseHookRuntimeContextFromEnv } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
 import { type HookApprovalSignal, resolveHookApprovalSignal } from "./hook-events/approval-hook-events";
+import { readClaudeOutstandingBackgroundWork } from "./hook-events/claude-hook-events";
 import {
 	type CodexMappedHookEvent,
 	resolveCodexRolloutFinalMessageForCwd,
@@ -35,6 +36,7 @@ interface HooksIngestArgs extends HookApprovalSignal {
 	workspaceId: string;
 	metadata?: Partial<RuntimeTaskHookActivity>;
 	payload?: Record<string, unknown> | null;
+	backgroundWork?: RuntimeHookBackgroundWork;
 }
 
 interface HookCommandMetadataOptionValues {
@@ -372,12 +374,15 @@ function parseHooksIngestArgs(
 	const payloadFromArg = payloadArg ? parseJsonObject(payloadArg) : null;
 	const payload = payloadFromBase64 ?? payloadFromStdin ?? payloadFromArg;
 	const metadata = normalizeHookMetadata(event, payload, flagMetadata);
+	// sked fork: tell the runtime which background work a Claude Stop ended on.
+	const backgroundWork = event === "to_review" ? readClaudeOutstandingBackgroundWork(payload) : null;
 	return {
 		event,
 		taskId: context.taskId,
 		workspaceId: context.workspaceId,
 		metadata,
 		payload,
+		...(backgroundWork ? { backgroundWork } : {}),
 		...resolveHookApprovalSignal(event, payload),
 	};
 }
@@ -401,6 +406,7 @@ async function ingestHookEvent(args: HooksIngestArgs): Promise<void> {
 			workspaceId: args.workspaceId,
 			event: args.event,
 			metadata: args.metadata,
+			backgroundWork: args.backgroundWork,
 			approval: args.approval,
 			approvalResolution: args.approvalResolution,
 		}),

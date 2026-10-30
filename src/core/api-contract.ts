@@ -1276,6 +1276,13 @@ export type RuntimeGitRefsResponse = z.infer<typeof runtimeGitRefsResponseSchema
 export const runtimeHookEventSchema = z.enum(["to_review", "to_in_progress", "activity", "approval_requested"]);
 export type RuntimeHookEvent = z.infer<typeof runtimeHookEventSchema>;
 
+// sked fork: background work the agent's turn ended on (Claude's Stop `background_tasks`), so a
+// to_review can wait for it instead of moving the card to Review mid-work.
+export const runtimeHookBackgroundWorkSchema = z.object({
+	taskIds: z.array(z.string()),
+	transcriptPath: z.string().nullable(),
+});
+export type RuntimeHookBackgroundWork = z.infer<typeof runtimeHookBackgroundWorkSchema>;
 // sked fork: which pending approvals a to_in_progress event resolves. Absent means all of them
 // (UserPromptSubmit and every non-Claude agent).
 export const runtimeHookApprovalResolutionSchema = z.discriminatedUnion("scope", [
@@ -1289,6 +1296,7 @@ export const runtimeHookIngestRequestSchema = z.object({
 	workspaceId: z.string(),
 	event: runtimeHookEventSchema,
 	metadata: runtimeTaskHookActivitySchema.partial().optional(),
+	backgroundWork: runtimeHookBackgroundWorkSchema.optional(),
 	approval: runtimeTaskPendingApprovalSchema.optional(),
 	approvalResolution: runtimeHookApprovalResolutionSchema.optional(),
 });
