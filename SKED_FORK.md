@@ -35,6 +35,7 @@ instead. To upgrade, install the newer release tarball.
 | Hidden agent terminals (`web-ui/src/terminal/persistent-terminal-manager.ts`, `web-ui/src/hooks/use-persistent-terminal-cleanup.ts`) | every card terminal a tab has shown stays connected and keeps parsing output until refresh | the shown terminal, the sidebar agent and the 3 most recently hidden stay connected; older ones close and restore from the server when reopened; a card's hidden terminals close when it leaves In Progress/Review |
 | Agent and shell processes (`src/terminal/pty-host/`, `src/terminal/session-manager.ts`) | children of the runtime; a restart or crash kills every running agent | run in a detached PTY host; a restart with `--skip-shutdown-cleanup`, or a crash, leaves them running and the new runtime reattaches them |
 | Stop on shutdown (`src/terminal/session-manager.ts`) | an agent stopped by shutdown can be relaunched by its exit handler (it dies with the runtime) | never relaunched |
+| Claude turn ends on background work (`src/trpc/hooks-api.ts`, `src/trpc/background-work-holds.ts`, `src/commands/hook-events/claude-hook-events.ts`) | Stop moves the card to Review while background Bash, subagents or Monitor are still running; it bounces back when Claude resumes | the card stays in In Progress as "Waiting on background job (N)" until a turn ends with nothing outstanding |
 
 ### Board writes under load
 
@@ -79,6 +80,20 @@ older Kanban cannot see them, and resuming those cards starts a second agent in 
 
 For maintainers: changing `PTY_HOST_PROTOCOL_VERSION` gives the new Kanban a new host, so the agents
 running in the old host are left unseen in exactly that way. Bump it only with a migration plan.
+
+### Background work keeps a Claude card In Progress
+
+Claude Code's Stop hook payload lists the session's in-flight background work in `background_tasks`
+(background Bash, background subagents, Monitor). When that list is not empty the turn ended only to
+wait: Claude starts a new turn by itself when a task finishes, and that turn's Stop decides the column.
+Auto-commit and auto-PR act only on the Review column, so they no longer fire in the middle of the work.
+
+If a task ends without Claude resuming (a task stopped from Claude's `/tasks` view records its end in
+the transcript but starts no turn), Kanban notices on a re-check every 15 seconds that reads only the
+bytes appended to the session transcript, and moves the card to Review. A Claude Code without the
+field, or a transcript Kanban cannot read, gets the upstream behaviour. A job that hangs keeps the card
+In Progress, labelled with the number of jobs it is waiting on. A Kanban restart forgets the re-check;
+the card then waits for Claude's next Stop.
 
 ### `KANBAN_CLAUDE_SKIP_PERMISSIONS`
 
