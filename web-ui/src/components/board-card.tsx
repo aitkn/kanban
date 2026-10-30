@@ -2,7 +2,7 @@ import { Draggable } from "@hello-pangea/dnd";
 import { getRuntimeAgentCatalogEntry } from "@runtime-agent-catalog";
 import { formatClineToolCallLabel } from "@runtime-cline-tool-call-display";
 import { buildTaskWorktreeDisplayPath } from "@runtime-task-worktree-path";
-import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -20,6 +20,11 @@ import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store
 import type { BoardCard as BoardCardModel, BoardColumnId } from "@/types";
 import { getTaskAutoReviewCancelButtonLabel } from "@/types";
 import { formatPathForDisplay } from "@/utils/path-display";
+import {
+	describeWaitingForApproval,
+	getFirstPendingApproval,
+	isSessionWaitingForApproval,
+} from "@/utils/pending-approval";
 import { useMeasure } from "@/utils/react-use";
 import {
 	clampTextWithInlineSuffix,
@@ -147,6 +152,12 @@ function getCardSessionActivity(summary: RuntimeTaskSessionSummary | undefined):
 	}
 	if (isCardCreditLimitError(summary)) {
 		return { dotColor: SESSION_ACTIVITY_COLOR.warning, text: "Out of credits" };
+	}
+	if (isSessionWaitingForApproval(summary)) {
+		return {
+			dotColor: SESSION_ACTIVITY_COLOR.waiting,
+			text: describeWaitingForApproval(getFirstPendingApproval(summary)),
+		};
 	}
 	const hookActivity = summary.latestHookActivity;
 	const activityText = hookActivity?.activityText?.trim();
@@ -397,9 +408,13 @@ export function BoardCard({
 	}, [descriptionFont, descriptionWidth, displayDescription]);
 
 	const isCreditLimit = isCardCreditLimitError(sessionSummary);
+	const isWaitingForApproval = !isTrashCard && isSessionWaitingForApproval(sessionSummary);
 	const renderStatusMarker = () => {
 		if (isCreditLimit) {
 			return <AlertTriangle size={12} className="text-status-orange" />;
+		}
+		if (isWaitingForApproval) {
+			return <ShieldAlert size={14} className="text-status-gold" />;
 		}
 		if (columnId === "in_progress") {
 			if (sessionSummary?.state === "failed") {
@@ -426,7 +441,9 @@ export function BoardCard({
 					deletions: reviewWorkspaceSnapshot.deletions ?? 0,
 				}
 		: null;
-	const showReviewGitActions = columnId === "review" && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
+	// sked fork: a git action types its prompt and then Enter, which would answer an open permission dialog.
+	const showReviewGitActions =
+		columnId === "review" && !isWaitingForApproval && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
 	const isAnyGitActionLoading = isCommitLoading || isOpenPrLoading;
 	const cancelAutomaticActionLabel =
 		!isTrashCard && card.autoReviewEnabled ? getTaskAutoReviewCancelButtonLabel(card.autoReviewMode) : null;
@@ -541,10 +558,12 @@ export function BoardCard({
 					>
 						<div
 							className={cn(
-								"rounded-md border border-border-bright bg-surface-2 p-2.5",
-								isCardInteractive && "cursor-pointer hover:bg-surface-3 hover:border-border-bright",
+								"rounded-md border bg-surface-2 p-2.5",
+								isWaitingForApproval ? "border-status-gold" : "border-border-bright",
+								isCardInteractive && "cursor-pointer hover:bg-surface-3",
+								isCardInteractive && !isWaitingForApproval && "hover:border-border-bright",
 								isDragging && "shadow-lg",
-								isHovered && isCardInteractive && "bg-surface-3 border-border-bright",
+								isHovered && isCardInteractive && "bg-surface-3",
 								isDependencySource && "kb-board-card-dependency-source",
 								isDependencyTarget && "kb-board-card-dependency-target",
 							)}
@@ -742,7 +761,14 @@ export function BoardCard({
 										}}
 									/>
 									<div className="min-w-0 flex-1">
-										<p className="m-0 font-mono truncate" style={{ fontSize: 12 }}>
+										<p
+											className={cn(
+												"m-0 font-mono",
+												// The tool or server it waits on is the point, so it wraps instead of truncating.
+												isWaitingForApproval ? "text-status-gold break-words" : "truncate",
+											)}
+											style={{ fontSize: 12 }}
+										>
 											{sessionActivity.text}
 										</p>
 									</div>

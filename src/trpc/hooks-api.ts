@@ -1,12 +1,15 @@
 import type {
 	RuntimeHookEvent,
+	RuntimeHookIngestRequest,
 	RuntimeHookIngestResponse,
+	RuntimeTaskPendingApproval,
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTurnCheckpoint,
 } from "../core/api-contract";
 import { parseHookIngestRequest } from "../core/api-validation";
 import { loadWorkspaceContextById } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
+import { getPendingApprovals } from "../terminal/session-state-machine";
 import { captureTaskTurnCheckpoint, deleteTaskTurnCheckpointRef } from "../workspace/turn-checkpoints";
 import type { RuntimeTrpcContext } from "./app-router";
 
@@ -14,7 +17,11 @@ export interface CreateHooksApiDependencies {
 	getWorkspacePathById: (workspaceId: string) => string | null;
 	ensureTerminalManagerForWorkspace: (workspaceId: string, repoPath: string) => Promise<TerminalSessionManager>;
 	broadcastRuntimeWorkspaceStateUpdated: (workspaceId: string, workspacePath: string) => Promise<void> | void;
-	broadcastTaskReadyForReview: (workspaceId: string, taskId: string) => void;
+	broadcastTaskReadyForReview: (
+		workspaceId: string,
+		taskId: string,
+		pendingApproval?: RuntimeTaskPendingApproval | null,
+	) => void;
 	captureTaskTurnCheckpoint?: (input: {
 		cwd: string;
 		taskId: string;
@@ -28,12 +35,37 @@ function canTransitionTaskForHookEvent(summary: RuntimeTaskSessionSummary, event
 		return false;
 	}
 	if (event === "to_review") {
-		return summary.state === "running";
+		return summary.state === "running" || isWaitingForApproval(summary);
+	}
+	if (event === "approval_requested") {
+		return summary.state === "running" || summary.state === "awaiting_review";
 	}
 	return (
 		summary.state === "awaiting_review" &&
-		(summary.reviewReason === "attention" || summary.reviewReason === "hook" || summary.reviewReason === "error")
+		(summary.reviewReason === "attention" ||
+			summary.reviewReason === "hook" ||
+			summary.reviewReason === "error" ||
+			summary.reviewReason === "approval")
 	);
+}
+
+function isWaitingForApproval(summary: RuntimeTaskSessionSummary): boolean {
+	return summary.state === "awaiting_review" && summary.reviewReason === "approval";
+}
+
+// sked fork: an approval request without a structured payload (an older hook command) still blocks the card.
+function resolveRequestedApproval(body: RuntimeHookIngestRequest): RuntimeTaskPendingApproval {
+	if (body.approval) {
+		return body.approval;
+	}
+	const isElicitation =
+		body.metadata?.hookEventName === "Elicitation" || body.metadata?.notificationType === "elicitation_dialog";
+	return {
+		kind: isElicitation ? "elicitation" : "permission",
+		toolName: isElicitation ? null : (body.metadata?.toolName ?? null),
+		mcpServerName: null,
+		toolCallKey: null,
+	};
 }
 
 export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcContext["hooksApi"] {
@@ -75,8 +107,28 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 					} satisfies RuntimeHookIngestResponse;
 				}
 
+				if (event === "approval_requested") {
+					const approvalSummary = manager.requestApproval(
+						taskId,
+						resolveRequestedApproval(body),
+						body.metadata?.hookEventName === "Notification",
+					);
+					if (body.metadata) {
+						manager.applyHookActivity(taskId, body.metadata);
+					}
+					void deps.broadcastRuntimeWorkspaceStateUpdated(workspaceId, workspacePath);
+					// Notify once per wait: Claude's follow-up Notification for the same prompt changes nothing.
+					const pendingApprovals = approvalSummary ? getPendingApprovals(approvalSummary) : [];
+					if (pendingApprovals.length > getPendingApprovals(summary).length) {
+						deps.broadcastTaskReadyForReview(workspaceId, taskId, pendingApprovals.at(-1) ?? null);
+					}
+					return { ok: true } satisfies RuntimeHookIngestResponse;
+				}
+
 				const transitionedSummary =
-					event === "to_review" ? manager.transitionToReview(taskId, "hook") : manager.transitionToRunning(taskId);
+					event === "to_review"
+						? manager.transitionToReview(taskId, "hook")
+						: manager.transitionToRunning(taskId, body.approvalResolution);
 				if (!transitionedSummary) {
 					return {
 						ok: false,

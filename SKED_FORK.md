@@ -35,6 +35,8 @@ instead. To upgrade, install the newer release tarball.
 | Hidden agent terminals (`web-ui/src/terminal/persistent-terminal-manager.ts`, `web-ui/src/hooks/use-persistent-terminal-cleanup.ts`) | every card terminal a tab has shown stays connected and keeps parsing output until refresh | the shown terminal, the sidebar agent and the 3 most recently hidden stay connected; older ones close and restore from the server when reopened; a card's hidden terminals close when it leaves In Progress/Review |
 | Agent and shell processes (`src/terminal/pty-host/`, `src/terminal/session-manager.ts`) | children of the runtime; a restart or crash kills every running agent | run in a detached PTY host; a restart with `--skip-shutdown-cleanup`, or a crash, leaves them running and the new runtime reattaches them |
 | Stop on shutdown (`src/terminal/session-manager.ts`) | an agent stopped by shutdown can be relaunched by its exit handler (it dies with the runtime) | never relaunched |
+| Claude waiting for the user (`src/terminal/session-state-machine.ts`, `src/commands/hook-events/approval-hook-events.ts`, `web-ui/src/utils/pending-approval.ts`) | a permission prompt moves the card to Review as if done, any tool finishing (a parallel call, a subagent) pulls it back while the prompt is still open, and an MCP elicitation form (Supabase `apply_migration`) leaves it in In Progress; auto-review can commit it mid-task | the card goes to Review marked "Waiting for your approval: <tool or MCP server>" and fires the ready notification; only that prompt's answer releases it; auto-review skips it |
+| Hook debug log (`src/commands/hook-events/hook-debug-log.ts`) | none; hook delivery failures are silent | `KANBAN_HOOK_DEBUG_LOG=<file>` appends one JSON line per hook |
 
 ### Board writes under load
 
@@ -79,6 +81,27 @@ older Kanban cannot see them, and resuming those cards starts a second agent in 
 
 For maintainers: changing `PTY_HOST_PROTOCOL_VERSION` gives the new Kanban a new host, so the agents
 running in the old host are left unseen in exactly that way. Bump it only with a migration plan.
+
+### Waiting for your approval
+
+A Claude card whose agent is blocked on the user, either a permission prompt or an MCP elicitation
+form, sits in Review with a gold border, a shield icon and "Waiting for your approval", naming the
+tool or MCP server. It returns to In Progress only when a hook shows the agent moved on:
+`ElicitationResult` (for a form), the `PostToolUse` of the same tool call, a new prompt, or the end of
+the turn. Another tool finishing does not release it. Auto-commit and auto-PR never act on a card in
+this state, and its Commit / Open PR buttons are hidden, because their trailing Enter would answer the
+open dialog.
+
+Claude's `PermissionRequest` payload has no `tool_use_id`, so a prompt is matched to its tool call by
+tool name plus a hash of the tool input (`AskUserQuestion` and `ExitPlanMode` by name alone, because
+Claude rewrites their input before `PostToolUse`). Answering in the terminal does not release the card: a "No"
+fires no hook while Claude waits for the user to type, and the keypress cannot tell it from "Yes". So
+after a "Yes" the card keeps waiting until the approved tool finishes.
+
+`KANBAN_HOOK_DEBUG_LOG=/path/hooks.jsonl` in the environment that starts `kanban` logs every hook
+Kanban receives (event, notification type, tool, `tool_use_id`, agent, permission mode, what Kanban
+derived from it, and whether the runtime accepted it). Agents inherit it, so set it before starting
+the cards you want to trace.
 
 ### `KANBAN_CLAUDE_SKIP_PERMISSIONS`
 

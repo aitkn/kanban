@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import type { TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
+import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { findCardSelection } from "@/state/board-state";
 import { getTaskWorkspaceSnapshot, subscribeToAnyTaskMetadata } from "@/stores/workspace-metadata-store";
 import type { BoardCard, BoardColumnId, BoardData, TaskAutoReviewMode } from "@/types";
 import { resolveTaskAutoReviewMode } from "@/types";
+import { isSessionWaitingForApproval } from "@/utils/pending-approval";
 
 const AUTO_REVIEW_ACTION_DELAY_MS = 500;
 
@@ -23,6 +25,9 @@ interface RequestMoveTaskToTrashOptions {
 
 interface UseReviewAutoActionsOptions {
 	board: BoardData;
+	// sked fork: a Review card whose agent waits for the user's approval is mid-task, not done. Committing,
+	// opening a PR or moving it to Done then would act on unfinished work.
+	sessions: Record<string, RuntimeTaskSessionSummary>;
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 	requestMoveTaskToTrash: (
@@ -35,12 +40,14 @@ interface UseReviewAutoActionsOptions {
 
 export function useReviewAutoActions({
 	board,
+	sessions,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
 	requestMoveTaskToTrash,
 	resetKey,
 }: UseReviewAutoActionsOptions): void {
 	const boardRef = useRef<BoardData>(board);
+	const sessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>(sessions);
 	const runAutoReviewGitActionRef = useRef(runAutoReviewGitAction);
 	const requestMoveTaskToTrashRef = useRef(requestMoveTaskToTrash);
 	const awaitingCleanActionByTaskIdRef = useRef<Record<string, TaskGitAction>>({});
@@ -52,6 +59,10 @@ export function useReviewAutoActions({
 	useEffect(() => {
 		boardRef.current = board;
 	}, [board]);
+
+	useEffect(() => {
+		sessionsRef.current = sessions;
+	}, [sessions]);
 
 	useEffect(() => {
 		runAutoReviewGitActionRef.current = runAutoReviewGitAction;
@@ -152,6 +163,11 @@ export function useReviewAutoActions({
 					clearAutoReviewTimer(reviewTask.id);
 					continue;
 				}
+				// Keeps an armed commit/PR armed: it resumes once the approval is answered and the turn ends.
+				if (isSessionWaitingForApproval(sessionsRef.current[reviewTask.id])) {
+					clearAutoReviewTimer(reviewTask.id);
+					continue;
+				}
 
 				const autoReviewMode = resolveTaskAutoReviewMode(reviewTask.autoReviewMode);
 				const loadingState = taskGitActionLoadingByTaskId[reviewTask.id];
@@ -179,7 +195,10 @@ export function useReviewAutoActions({
 							if (!latestSelection || latestSelection.column.id !== "review") {
 								return;
 							}
-							if (!isTaskAutoReviewEnabled(latestSelection.card)) {
+							if (
+								!isTaskAutoReviewEnabled(latestSelection.card) ||
+								isSessionWaitingForApproval(sessionsRef.current[reviewTask.id])
+							) {
 								return;
 							}
 							const latestMode = resolveTaskAutoReviewMode(latestSelection.card.autoReviewMode);
@@ -212,7 +231,10 @@ export function useReviewAutoActions({
 					if (!latestSelection || latestSelection.column.id !== "review") {
 						return;
 					}
-					if (!isTaskAutoReviewEnabled(latestSelection.card)) {
+					if (
+						!isTaskAutoReviewEnabled(latestSelection.card) ||
+						isSessionWaitingForApproval(sessionsRef.current[reviewTask.id])
+					) {
 						return;
 					}
 					const latestMode = resolveTaskAutoReviewMode(latestSelection.card.autoReviewMode);
@@ -235,7 +257,7 @@ export function useReviewAutoActions({
 		evaluateAutoReview({
 			source: "board_or_loading_change",
 		});
-	}, [board, evaluateAutoReview, taskGitActionLoadingByTaskId]);
+	}, [board, evaluateAutoReview, sessions, taskGitActionLoadingByTaskId]);
 
 	useEffect(() => {
 		return subscribeToAnyTaskMetadata((taskId) => {
