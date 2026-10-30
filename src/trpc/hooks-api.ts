@@ -47,6 +47,7 @@ function canTransitionTaskForHookEvent(summary: RuntimeTaskSessionSummary, event
 	);
 }
 
+/** Keeps per-card background-work holds: create one per runtime, never one per request. */
 export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcContext["hooksApi"] {
 	const checkpointCapture = deps.captureTaskTurnCheckpoint ?? captureTaskTurnCheckpoint;
 	const checkpointRefDelete = deps.deleteTaskTurnCheckpointRef ?? deleteTaskTurnCheckpointRef;
@@ -167,15 +168,18 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 				let metadata = body.metadata;
 				// sked fork: a turn that ended on outstanding background work stays In Progress.
 				if (event === "to_review" && body.backgroundWork && summary.state === "running") {
-					const held = await backgroundWorkHolds.hold(target, body.backgroundWork, {
+					const holdResult = await backgroundWorkHolds.hold(target, body.backgroundWork, {
 						pid: summary.pid,
 						reviewMetadata: metadata,
 					});
-					if (held) {
+					if (holdResult === "held") {
 						manager.applyHookActivity(taskId, {
 							...metadata,
 							activityText: formatBackgroundWorkActivity(body.backgroundWork.taskIds.length),
 						});
+					}
+					if (holdResult !== "unavailable") {
+						// "superseded": a later hook already decided the card; this Stop is stale.
 						return { ok: true } satisfies RuntimeHookIngestResponse;
 					}
 				}

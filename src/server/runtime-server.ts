@@ -188,6 +188,15 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		deps.workspaceRegistry.clearActiveWorkspace();
 	};
 
+	// sked fork: built once, not per request. It keeps the background-work holds of every card,
+	// and each hook is a separate request.
+	const hooksApi = createHooksApi({
+		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
+		ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
+		broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
+		broadcastTaskReadyForReview: deps.runtimeStateHub.broadcastTaskReadyForReview,
+	});
+
 	const createTrpcContext = async (req: IncomingMessage): Promise<RuntimeTrpcContext> => {
 		const requestUrl = new URL(req.url ?? "/", "http://localhost");
 		const scope = await resolveWorkspaceScopeFromRequest(req, requestUrl);
@@ -240,12 +249,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				pickDirectoryPathFromSystemDialog: deps.pickDirectoryPathFromSystemDialog,
 				serverCwd: process.cwd(),
 			}),
-			hooksApi: createHooksApi({
-				getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
-				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
-				broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
-				broadcastTaskReadyForReview: deps.runtimeStateHub.broadcastTaskReadyForReview,
-			}),
+			hooksApi,
 		};
 	};
 

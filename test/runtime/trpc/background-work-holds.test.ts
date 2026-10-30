@@ -79,7 +79,7 @@ describe("BackgroundWorkHolds", () => {
 				{ taskIds: ["b1"], transcriptPath: "/t.jsonl" },
 				{ pid: 1, reviewMetadata: undefined },
 			),
-		).toBe(true);
+		).toBe("held");
 		await advance(60_000);
 		expect(onSettled).not.toHaveBeenCalled();
 		expect(holds.isHeld(target)).toBe(true);
@@ -143,7 +143,7 @@ describe("BackgroundWorkHolds", () => {
 	it("refuses to hold without a readable transcript", async () => {
 		expect(
 			await holds.hold(target, { taskIds: ["b1"], transcriptPath: null }, { pid: 1, reviewMetadata: undefined }),
-		).toBe(false);
+		).toBe("unavailable");
 		const unreadable = new BackgroundWorkHolds({
 			isSessionCurrent: async () => true,
 			onSettled,
@@ -156,7 +156,32 @@ describe("BackgroundWorkHolds", () => {
 				{ taskIds: ["b1"], transcriptPath: "/t.jsonl" },
 				{ pid: 1, reviewMetadata: undefined },
 			),
-		).toBe(false);
+		).toBe("unavailable");
+	});
+
+	it("reports a hold released while it was being set up as superseded", async () => {
+		const pendingRead: { finish?: () => void } = {};
+		const slowHolds = new BackgroundWorkHolds({
+			isSessionCurrent: async () => true,
+			onSettled,
+			onProgress,
+			readTranscriptFrom: (path, offset) =>
+				new Promise((resolve) => {
+					pendingRead.finish = () => void transcript.read(path, offset).then(resolve);
+				}),
+			now: () => now,
+		});
+		const pending = slowHolds.hold(
+			target,
+			{ taskIds: ["b1"], transcriptPath: "/t.jsonl" },
+			{ pid: 1, reviewMetadata: undefined },
+		);
+		// A UserPromptSubmit arrives before the transcript read finishes.
+		expect(slowHolds.isHeld(target)).toBe(true);
+		slowHolds.release(target);
+		pendingRead.finish?.();
+		expect(await pending).toBe("superseded");
+		expect(slowHolds.isHeld(target)).toBe(false);
 	});
 
 	it("stops re-checking after release", async () => {

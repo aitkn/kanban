@@ -260,6 +260,28 @@ describe("createHooksApi Claude Stop with background work", () => {
 		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not move a resumed turn to review when the finished job's notification is in the transcript", async () => {
+		await stop(["b1"]);
+		// Claude records the completion and resumes for it right away.
+		transcript += `${JSON.stringify({
+			type: "queue-operation",
+			operation: "enqueue",
+			timestamp: new Date(Date.now()).toISOString(),
+			content: "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>",
+		})}\n`;
+		await api.ingest({
+			taskId: "task-1",
+			workspaceId: "workspace-1",
+			event: "to_in_progress",
+			metadata: { source: "claude", hookEventName: "UserPromptSubmit", activityText: "Resumed after user input" },
+		});
+
+		// The resumed turn runs long; nothing may settle it to review behind its back.
+		await vi.advanceTimersByTimeAsync(120_000);
+		expect(summary.state).toBe("running");
+		expect(manager.transitionToReview).not.toHaveBeenCalled();
+	});
+
 	it("moves to review when the job ends and the agent never resumes", async () => {
 		await stop(["b1"]);
 		// The user stops the job from /tasks 10s later: Claude records it, but starts no turn.

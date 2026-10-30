@@ -50,6 +50,9 @@ interface BackgroundWorkHold {
 	timer: NodeJS.Timeout | null;
 }
 
+/** "superseded": a later hook released or replaced the hold while it was being set up. */
+export type BackgroundWorkHoldResult = "held" | "superseded" | "unavailable";
+
 export function formatBackgroundWorkActivity(outstandingCount: number): string {
 	return `Waiting on background job (${outstandingCount})`;
 }
@@ -101,17 +104,17 @@ export class BackgroundWorkHolds {
 	}
 
 	/**
-	 * Holds the card in In Progress until the work finishes. Returns false when the work cannot be
-	 * re-checked (no readable transcript): the caller then moves the card to Review as before.
+	 * Holds the card in In Progress until the work finishes. Returns "unavailable" when the work cannot
+	 * be re-checked (no readable transcript): the caller then moves the card to Review as before.
 	 */
 	async hold(
 		target: BackgroundWorkHoldTarget,
 		work: RuntimeHookBackgroundWork,
 		session: { pid: number | null; reviewMetadata: Partial<RuntimeTaskHookActivity> | undefined },
-	): Promise<boolean> {
+	): Promise<BackgroundWorkHoldResult> {
 		this.release(target);
 		if (work.taskIds.length === 0 || !work.transcriptPath) {
-			return false;
+			return "unavailable";
 		}
 		const hold: BackgroundWorkHold = {
 			target,
@@ -128,15 +131,15 @@ export class BackgroundWorkHolds {
 		// Only completions recorded after this Stop count: the listed tasks were still running when it fired.
 		const start = await this.readTranscript(work.transcriptPath, Number.MAX_SAFE_INTEGER);
 		if (!this.isCurrent(hold)) {
-			return true;
+			return "superseded";
 		}
 		if (!start) {
 			this.release(target);
-			return false;
+			return "unavailable";
 		}
 		hold.offset = start.nextOffset;
 		this.schedule(hold);
-		return true;
+		return "held";
 	}
 
 	release(target: BackgroundWorkHoldTarget): void {
