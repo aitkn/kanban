@@ -206,4 +206,38 @@ describe("createHooksApi", () => {
 		expect(manager.getSummary("task-1")?.reviewReason).toBe("approval");
 		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(2);
 	});
+
+	it("blocks on an MCP form that opens right after a prompt settled", async () => {
+		const manager = new TerminalSessionManager();
+		manager.hydrateFromRecord({ "task-1": createSummary() });
+		const broadcastTaskReadyForReview = vi.fn();
+		const api = createHooksApi({
+			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
+			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
+			broadcastTaskReadyForReview,
+			captureTaskTurnCheckpoint: vi.fn(),
+		});
+		const ingest = (event: RuntimeHookEvent, payload: Record<string, unknown>) =>
+			api.ingest({
+				taskId: "task-1",
+				workspaceId: "workspace-1",
+				event,
+				metadata: { hookEventName: String(payload.hook_event_name), source: "claude" },
+				...resolveHookApprovalSignal(event, payload),
+			});
+		const request = { hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "ls" } };
+
+		await ingest("approval_requested", request);
+		await ingest("to_in_progress", { ...request, hook_event_name: "PostToolUse", tool_use_id: "toolu_1" });
+		expect(manager.getSummary("task-1")?.state).toBe("running");
+
+		// Keyless like the Notification echo, but it is the form itself.
+		await ingest("approval_requested", {
+			hook_event_name: "Elicitation",
+			mcp_server_name: "plugin:supabase:supabase",
+		});
+		expect(manager.getSummary("task-1")).toMatchObject({ state: "awaiting_review", reviewReason: "approval" });
+		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(2);
+	});
 });

@@ -182,19 +182,6 @@ function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSum
 
 const STALE_APPROVAL_NOTIFICATION_WINDOW_MS = 3_000;
 
-// Enter, a lone Escape, or a digit (Claude's permission dialog selects "1. Yes" on the digit alone). Arrow
-// keys arrive as one multi-byte chunk, so moving through the options is not an answer.
-function isPermissionPromptAnswerInput(data: Buffer): boolean {
-	if (data.includes(13) || data.includes(10)) {
-		return true;
-	}
-	if (data.length !== 1) {
-		return false;
-	}
-	const byte = data[0];
-	return byte === 0x1b || (byte !== undefined && byte >= 0x31 && byte <= 0x39);
-}
-
 function isActiveState(state: RuntimeTaskSessionState): boolean {
 	return state === "running" || state === "awaiting_review";
 }
@@ -961,11 +948,6 @@ export class TerminalSessionManager implements TerminalSessionService {
 			entry.active.awaitingCodexPromptAfterEnter = true;
 		}
 		entry.active.session.write(data);
-		// sked fork: Claude reports no event when a permission prompt is answered, only PostToolUse once the
-		// tool finishes (or nothing at all on "No"). The keypress that answers it is the earliest signal.
-		if (isPermissionPromptAnswerInput(data)) {
-			this.applySummaryTransition(entry, { type: "user.approval-answered" });
-		}
 		return cloneSummary(entry.summary);
 	}
 
@@ -1093,15 +1075,20 @@ export class TerminalSessionManager implements TerminalSessionService {
 	}
 
 	// sked fork: the agent is blocked on a permission prompt or an MCP elicitation form.
-	requestApproval(taskId: string, approval: RuntimeTaskPendingApproval): RuntimeTaskSessionSummary | null {
+	// `isNotification`: Claude's Notification hook, sent 6s after a prompt opened if it is still open.
+	requestApproval(
+		taskId: string,
+		approval: RuntimeTaskPendingApproval,
+		isNotification: boolean,
+	): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		if (!entry) {
 			return null;
 		}
-		// A keyless request is Claude's Notification, sent 6s after a prompt opened. One that lands just after
-		// the prompt was answered is that answered prompt's echo; a new prompt's own Notification is 6s away.
+		// A Notification that lands just after a prompt settled is that prompt's echo; a new prompt's own
+		// Notification is 6s away. An Elicitation is keyless too, but it is the prompt itself.
 		if (
-			approval.toolCallKey === null &&
+			isNotification &&
 			entry.lastApprovalSettledAt !== undefined &&
 			now() - entry.lastApprovalSettledAt < STALE_APPROVAL_NOTIFICATION_WINDOW_MS
 		) {

@@ -3,8 +3,8 @@
 // Verified against Claude Code 2.1.314 payloads:
 // - PermissionRequest carries tool_name, tool_input and mcp_server, but no tool_use_id. A prompt is therefore
 //   matched to its PostToolUse by tool name plus a hash of the tool input.
-// - Elicitation and ElicitationResult carry mcp_server_name and no tool fields. ElicitationResult fires for
-//   accept, decline and cancel.
+// - Elicitation and ElicitationResult carry mcp_server_name and no tool fields. ElicitationResult fired for
+//   accept and cancel (decline not checked).
 // - Notification permission_prompt / elicitation_dialog carry neither; they fire ~6s after the prompt opens
 //   and only if it is still open.
 import { createHash } from "node:crypto";

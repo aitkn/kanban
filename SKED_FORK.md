@@ -86,14 +86,16 @@ running in the old host are left unseen in exactly that way. Bump it only with a
 
 A Claude card whose agent is blocked on the user, either a permission prompt or an MCP elicitation
 form, sits in Review with a gold border, a shield icon and "Waiting for your approval", naming the
-tool or MCP server. It returns to In Progress only when that prompt is answered: the answering
-keypress in its terminal (Enter, Esc or a digit, for a permission prompt), `ElicitationResult` (for a
-form), the `PostToolUse` of the same tool call, a new prompt, or the end of the turn. Another tool
-finishing does not release it. Auto-commit and auto-PR never act on a card in this state.
+tool or MCP server. It returns to In Progress only when a hook shows the agent moved on:
+`ElicitationResult` (for a form), the `PostToolUse` of the same tool call, a new prompt, or the end of
+the turn. Another tool finishing does not release it. Auto-commit and auto-PR never act on a card in
+this state, and its Commit / Open PR buttons are hidden, because their trailing Enter would answer the
+open dialog.
 
 Claude's `PermissionRequest` payload has no `tool_use_id`, so a prompt is matched to its tool call by
-tool name plus a hash of the tool input. A "No" answer fires no hook; the card is released by that
-keypress or by the next prompt.
+tool name plus a hash of the tool input. Answering in the terminal does not release the card: a "No"
+fires no hook while Claude waits for the user to type, and the keypress cannot tell it from "Yes". So
+after a "Yes" the card keeps waiting until the approved tool finishes.
 
 `KANBAN_HOOK_DEBUG_LOG=/path/hooks.jsonl` in the environment that starts `kanban` logs every hook
 Kanban receives (event, notification type, tool, `tool_use_id`, agent, permission mode, what Kanban

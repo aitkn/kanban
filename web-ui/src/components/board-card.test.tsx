@@ -212,6 +212,46 @@ describe("BoardCard", () => {
 		expect(trashButton?.querySelector("svg.animate-spin")).toBeTruthy();
 	});
 
+	it("hides Commit and Open PR while the agent waits for approval", async () => {
+		mockWorkspaceSnapshot = {
+			taskId: "task-1",
+			path: "/tmp/worktree",
+			branch: "task-1",
+			isDetached: false,
+			headCommit: "abc123",
+			changedFiles: 2,
+			additions: 1,
+			deletions: 0,
+		};
+		const gitActionLabels = () =>
+			Array.from(container.querySelectorAll("button"))
+				.map((button) => button.textContent?.trim())
+				.filter((label) => label === "Commit" || label === "Open PR");
+		const renderWithReason = async (reviewReason: RuntimeTaskSessionSummary["reviewReason"]) => {
+			await act(async () => {
+				root.render(
+					<BoardCard
+						card={createCard()}
+						index={0}
+						columnId="review"
+						sessionSummary={createSummary("awaiting_review", {
+							reviewReason,
+							pendingApprovals:
+								reviewReason === "approval"
+									? [{ kind: "permission", toolName: "Bash", mcpServerName: null, toolCallKey: "Bash:abc" }]
+									: [],
+						})}
+					/>,
+				);
+			});
+		};
+
+		await renderWithReason("hook");
+		expect(gitActionLabels()).toEqual(["Commit", "Open PR"]);
+		await renderWithReason("approval");
+		expect(gitActionLabels()).toEqual([]);
+	});
+
 	it("shows inline see more and less controls for long descriptions", async () => {
 		const description =
 			"Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau final hidden segment";

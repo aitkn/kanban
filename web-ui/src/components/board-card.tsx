@@ -441,7 +441,9 @@ export function BoardCard({
 					deletions: reviewWorkspaceSnapshot.deletions ?? 0,
 				}
 		: null;
-	const showReviewGitActions = columnId === "review" && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
+	// sked fork: a git action types its prompt and then Enter, which would answer an open permission dialog.
+	const showReviewGitActions =
+		columnId === "review" && !isWaitingForApproval && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
 	const isAnyGitActionLoading = isCommitLoading || isOpenPrLoading;
 	const cancelAutomaticActionLabel =
 		!isTrashCard && card.autoReviewEnabled ? getTaskAutoReviewCancelButtonLabel(card.autoReviewMode) : null;

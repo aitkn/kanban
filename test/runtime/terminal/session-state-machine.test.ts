@@ -184,10 +184,6 @@ describe("session state machine: waiting for approval", () => {
 		);
 	});
 
-	it("returns to running when the user answers the permission prompt in the terminal", () => {
-		expect(apply(waitingForPeek(), { type: "user.approval-answered" }).state).toBe("running");
-	});
-
 	it("returns to running on UserPromptSubmit (a prompt after a denial)", () => {
 		expect(apply(waitingForPeek(), hookEvent("to_in_progress", userPromptSubmit)).state).toBe("running");
 	});
@@ -262,8 +258,20 @@ describe("session state machine: MCP elicitation", () => {
 		expect(reduceSessionTransition(summary, hookEvent("to_in_progress", otherServer)).changed).toBe(false);
 	});
 
-	it("stays waiting on keypresses, which only fill in the form", () => {
-		expect(reduceSessionTransition(waitingForElicitation(), { type: "user.approval-answered" }).changed).toBe(false);
+	it("waits for both when an approved tool opens a form, and releases after the tool finishes", () => {
+		const applyMigration = {
+			...permissionRequestPeek,
+			tool_name: "mcp__plugin_supabase_supabase__apply_migration",
+			tool_input: { name: "add_index", query: "create index ..." },
+			mcp_server: { name: "plugin:supabase:supabase", source: "plugin" },
+		};
+		let summary = apply(createSummary(), hookEvent("approval_requested", applyMigration));
+		summary = apply(summary, hookEvent("approval_requested", elicitation));
+		expect(getPendingApprovals(summary).map((entry) => entry.kind)).toEqual(["permission", "elicitation"]);
+		summary = apply(summary, hookEvent("to_in_progress", elicitationResult));
+		expect(summary.reviewReason).toBe("approval");
+		summary = apply(summary, hookEvent("to_in_progress", { ...applyMigration, hook_event_name: "PostToolUse" }));
+		expect(summary.state).toBe("running");
 	});
 });
 
@@ -271,11 +279,5 @@ describe("session state machine: existing review transitions", () => {
 	it("still returns a finished-turn review card to running on PostToolUse", () => {
 		const reviewCard = createSummary({ state: "awaiting_review", reviewReason: "hook" });
 		expect(apply(reviewCard, hookEvent("to_in_progress", postToolUseSlowOp)).state).toBe("running");
-	});
-
-	it("ignores a terminal keypress when nothing is pending", () => {
-		const reviewCard = createSummary({ state: "awaiting_review", reviewReason: "hook" });
-		expect(reduceSessionTransition(reviewCard, { type: "user.approval-answered" }).changed).toBe(false);
-		expect(reduceSessionTransition(createSummary(), { type: "user.approval-answered" }).changed).toBe(false);
 	});
 });

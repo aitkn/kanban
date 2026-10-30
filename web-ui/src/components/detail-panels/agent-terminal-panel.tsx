@@ -117,16 +117,20 @@ function AgentTerminalReviewActions({
 	onOpenPr,
 	isCommitLoading,
 	isOpenPrLoading,
+	isWaitingForApproval,
 }: {
 	taskId: string;
 	taskColumnId: string;
+	isWaitingForApproval: boolean;
 	onCommit?: () => void;
 	onOpenPr?: () => void;
 	isCommitLoading: boolean;
 	isOpenPrLoading: boolean;
 }): ReactElement | null {
 	const reviewWorkspaceSnapshot = useTaskWorkspaceSnapshotValue(taskId);
-	const showReviewGitActions = taskColumnId === "review" && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
+	// sked fork: a git action types its prompt and then Enter, which would answer an open permission dialog.
+	const showReviewGitActions =
+		taskColumnId === "review" && !isWaitingForApproval && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
 
 	if (!showReviewGitActions) {
 		return null;
@@ -333,6 +337,7 @@ function AgentTerminalPanelLayout({
 					<AgentTerminalReviewActions
 						taskId={taskId}
 						taskColumnId={taskColumnId}
+						isWaitingForApproval={isSessionWaitingForApproval(summary)}
 						onCommit={onCommit}
 						onOpenPr={onOpenPr}
 						isCommitLoading={isCommitLoading}

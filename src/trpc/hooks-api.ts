@@ -108,7 +108,11 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 				}
 
 				if (event === "approval_requested") {
-					const approvalSummary = manager.requestApproval(taskId, resolveRequestedApproval(body));
+					const approvalSummary = manager.requestApproval(
+						taskId,
+						resolveRequestedApproval(body),
+						body.metadata?.hookEventName === "Notification",
+					);
 					if (body.metadata) {
 						manager.applyHookActivity(taskId, body.metadata);
 					}

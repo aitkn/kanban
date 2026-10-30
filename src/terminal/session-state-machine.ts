@@ -9,7 +9,6 @@ export type SessionTransitionEvent =
 	| { type: "hook.to_review" }
 	| { type: "hook.to_in_progress"; approvalResolution?: RuntimeHookApprovalResolution }
 	| { type: "hook.approval_requested"; approval: RuntimeTaskPendingApproval }
-	| { type: "user.approval-answered" }
 	| { type: "agent.prompt-ready" }
 	| { type: "process.exit"; exitCode: number | null; interrupted: boolean };
 
@@ -66,17 +65,14 @@ function addPendingApproval(
 	return [...withoutPlaceholder, approval];
 }
 
-// Undefined resolves everything (a new user prompt); "permission" is a keypress that answers a permission
-// dialog, which leaves an open elicitation form alone because ElicitationResult always reports those.
+// Undefined resolves everything (a new user prompt). Only hooks resolve a prompt: the keypress that answers
+// one cannot tell "Yes" from "No", and a "No" fires no hook while Claude waits for the user to type.
 function resolvePendingApprovals(
 	pending: RuntimeTaskPendingApproval[],
-	resolution: RuntimeHookApprovalResolution | "permission" | undefined,
+	resolution: RuntimeHookApprovalResolution | undefined,
 ): RuntimeTaskPendingApproval[] {
 	if (resolution === undefined) {
 		return [];
-	}
-	if (resolution === "permission") {
-		return pending.filter((entry) => entry.kind !== "permission");
 	}
 	if (resolution.scope === "tool_call") {
 		return pending.filter((entry) => entry.toolCallKey !== resolution.toolCallKey);
@@ -164,9 +160,6 @@ export function reduceSessionTransition(
 				},
 				clearAttentionBuffer: summary.state === "running",
 			};
-		}
-		case "user.approval-answered": {
-			return settlePendingApprovals(summary, resolvePendingApprovals(getPendingApprovals(summary), "permission"));
 		}
 		case "hook.to_in_progress": {
 			if (isWaitingForApproval(summary)) {

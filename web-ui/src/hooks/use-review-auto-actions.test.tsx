@@ -72,15 +72,20 @@ function createReviewSession(reviewReason: RuntimeTaskSessionSummary["reviewReas
 function HookHarness({
 	board,
 	sessions = {},
+	changedFiles,
 	runAutoReviewGitAction,
 	requestMoveTaskToTrash,
 }: {
 	board: BoardData;
 	sessions?: Record<string, RuntimeTaskSessionSummary>;
+	changedFiles?: number;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 	requestMoveTaskToTrash: (taskId: string, fromColumnId: BoardColumnId) => Promise<void>;
 }): null {
-	setTaskWorkspaceSnapshot(workspaceSnapshots["task-1"] ?? null);
+	const snapshot = workspaceSnapshots["task-1"];
+	setTaskWorkspaceSnapshot(
+		snapshot && changedFiles !== undefined ? { ...snapshot, changedFiles } : (snapshot ?? null),
+	);
 	useReviewAutoActions({
 		board,
 		sessions,
@@ -237,5 +242,37 @@ describe("useReviewAutoActions", () => {
 		});
 
 		expect(runAutoReviewGitAction).toHaveBeenCalledWith("task-1", "commit");
+	});
+
+	it("does not move a committed card to done while its agent waits for approval", async () => {
+		const runAutoReviewGitAction = vi.fn(async () => true);
+		const requestMoveTaskToTrash = vi.fn(async () => {});
+		const board = createBoard(true);
+		const render = async (reviewReason: RuntimeTaskSessionSummary["reviewReason"], changedFiles: number) => {
+			await act(async () => {
+				root.render(
+					<HookHarness
+						board={board}
+						sessions={{ "task-1": createReviewSession(reviewReason) }}
+						changedFiles={changedFiles}
+						runAutoReviewGitAction={runAutoReviewGitAction}
+						requestMoveTaskToTrash={requestMoveTaskToTrash}
+					/>,
+				);
+			});
+			await act(async () => {
+				vi.advanceTimersByTime(1000);
+			});
+		};
+
+		// The commit fires and arms the move to done.
+		await render("hook", 3);
+		expect(runAutoReviewGitAction).toHaveBeenCalledWith("task-1", "commit");
+		// The agent committed, then asked for approval (for example to push): the tree is clean but the card waits.
+		await render("approval", 0);
+		expect(requestMoveTaskToTrash).not.toHaveBeenCalled();
+		// Once the turn ends, the armed move goes ahead.
+		await render("hook", 0);
+		expect(requestMoveTaskToTrash).toHaveBeenCalledWith("task-1", "review", { skipWorkingChangeWarning: true });
 	});
 });
