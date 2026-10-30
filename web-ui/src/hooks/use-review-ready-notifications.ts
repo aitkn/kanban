@@ -8,6 +8,7 @@ import {
 	subscribeToNotificationBadgeClear,
 } from "@/utils/notification-badge-sync";
 import { getBrowserNotificationPermission } from "@/utils/notification-permission";
+import { describeWaitingForApproval } from "@/utils/pending-approval";
 import { useDocumentTitle, useInterval, useUnmount, useWindowEvent } from "@/utils/react-use";
 import {
 	createTabPresenceId,
@@ -182,13 +183,16 @@ export function useReviewReadyNotifications({
 		const taskTitle = selection
 			? truncateTaskPromptLabel(selection.card.prompt) || `Task ${latestTaskReadyForReview.taskId}`
 			: `Task ${latestTaskReadyForReview.taskId}`;
-		const notificationBody = resolveReviewReadyNotificationBody(
-			latestTaskReadyForReview.taskId,
-			taskTitle,
-			taskSessions,
-		);
+		// sked fork: the event names the prompt; the session summary that says so can arrive after it.
+		const pendingApproval = latestTaskReadyForReview.pendingApproval ?? null;
+		const notificationBody = pendingApproval
+			? `${describeWaitingForApproval(pendingApproval)} · ${taskTitle}`
+			: resolveReviewReadyNotificationBody(latestTaskReadyForReview.taskId, taskTitle, taskSessions);
 		setPendingReviewReadyNotificationCount((current) => current + 1);
-		const notificationTitle = workspaceTitle ? `${workspaceTitle} ready for review` : "Ready for review";
+		const readyLabel = pendingApproval ? "needs your approval" : "ready for review";
+		const notificationTitle = workspaceTitle
+			? `${workspaceTitle} ${readyLabel}`
+			: readyLabel.charAt(0).toUpperCase() + readyLabel.slice(1);
 		showReadyForReviewNotification(latestTaskReadyForReview.taskId, notificationTitle, notificationBody);
 	}, [
 		activeWorkspaceId,

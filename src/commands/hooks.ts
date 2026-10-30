@@ -9,6 +9,7 @@ import { buildKanbanRuntimeUrl, getRuntimeFetch } from "../core/runtime-endpoint
 import { buildWindowsCmdArgsArray, resolveWindowsComSpec, shouldUseWindowsCmdLaunch } from "../core/windows-cmd-launch";
 import { parseHookRuntimeContextFromEnv } from "../terminal/hook-runtime-context";
 import type { RuntimeAppRouter } from "../trpc/app-router";
+import { type HookApprovalSignal, resolveHookApprovalSignal } from "./hook-events/approval-hook-events";
 import { readClaudeOutstandingBackgroundWork } from "./hook-events/claude-hook-events";
 import {
 	type CodexMappedHookEvent,
@@ -16,6 +17,7 @@ import {
 	startCodexSessionWatcher,
 } from "./hook-events/codex-hook-events";
 import { enrichDroidReviewMetadata } from "./hook-events/droid-hook-events";
+import { appendHookDebugLog } from "./hook-events/hook-debug-log";
 import { asRecord, normalizeWhitespace, readNestedString, readStringField } from "./hook-events/hook-utils";
 import { normalizeKiroHookMetadata } from "./hook-events/kiro-hook-events";
 
@@ -26,9 +28,9 @@ export {
 	startCodexSessionWatcher,
 } from "./hook-events/codex-hook-events";
 
-const VALID_EVENTS = new Set<RuntimeHookEvent>(["to_review", "to_in_progress", "activity"]);
+const VALID_EVENTS = new Set<RuntimeHookEvent>(["to_review", "to_in_progress", "activity", "approval_requested"]);
 
-interface HooksIngestArgs {
+interface HooksIngestArgs extends HookApprovalSignal {
 	event: RuntimeHookEvent;
 	taskId: string;
 	workspaceId: string;
@@ -236,7 +238,7 @@ function inferActivityText(
 		}
 		return error ? `Tool failed: ${error}` : "Tool failed";
 	}
-	if (normalizedHookEvent === "permissionrequest") {
+	if (normalizedHookEvent === "permissionrequest" || normalizedHookEvent === "elicitation") {
 		return "Waiting for approval";
 	}
 	if (normalizedHookEvent === "userpromptsubmit" || normalizedHookEvent === "beforeagent") {
@@ -253,7 +255,11 @@ function inferActivityText(
 		return finalMessage ? `Final: ${finalMessage}` : null;
 	}
 
-	if (notificationType === "permission_prompt" || notificationType === "permission.asked") {
+	if (
+		notificationType === "permission_prompt" ||
+		notificationType === "permission.asked" ||
+		notificationType === "elicitation_dialog"
+	) {
 		return "Waiting for approval";
 	}
 	if (notificationType === "user_attention") {
@@ -377,6 +383,7 @@ function parseHooksIngestArgs(
 		metadata,
 		payload,
 		...(backgroundWork ? { backgroundWork } : {}),
+		...resolveHookApprovalSignal(event, payload),
 	};
 }
 
@@ -400,12 +407,24 @@ async function ingestHookEvent(args: HooksIngestArgs): Promise<void> {
 			event: args.event,
 			metadata: args.metadata,
 			backgroundWork: args.backgroundWork,
+			approval: args.approval,
+			approvalResolution: args.approvalResolution,
 		}),
 		3000,
 		"kanban hooks ingest",
 	);
 	if (ingestResponse.ok === false) {
 		throw new Error(ingestResponse.error ?? "Hook ingest failed");
+	}
+}
+
+async function ingestHookEventWithDebugLog(args: HooksIngestArgs): Promise<void> {
+	try {
+		await ingestHookEvent(args);
+		appendHookDebugLog({ ...args, payload: args.payload ?? null, result: "ok" });
+	} catch (error) {
+		appendHookDebugLog({ ...args, payload: args.payload ?? null, result: `error: ${formatError(error)}` });
+		throw error;
 	}
 }
 
@@ -506,7 +525,7 @@ async function runHooksNotify(
 		const parsedArgs = parseHooksIngestArgs(event, options, payloadArg, stdinPayload);
 		const codexEnrichedArgs = await enrichCodexReviewMetadata(parsedArgs, process.cwd());
 		const args = await enrichDroidReviewMetadata(codexEnrichedArgs);
-		await ingestHookEvent(args);
+		await ingestHookEventWithDebugLog(args);
 	} catch {
 		// Best effort only.
 	}
@@ -554,7 +573,7 @@ async function runCodexHookSubcommand(
 	try {
 		const parsedArgs = parseHooksIngestArgs(event, options, payloadArg, payload);
 		const codexEnrichedArgs = await enrichCodexReviewMetadata(parsedArgs, process.cwd());
-		await ingestHookEvent(codexEnrichedArgs);
+		await ingestHookEventWithDebugLog(codexEnrichedArgs);
 	} catch {
 		// Best effort only.
 	}
@@ -735,7 +754,7 @@ async function runHooksIngest(
 	}
 
 	try {
-		await ingestHookEvent(args);
+		await ingestHookEventWithDebugLog(args);
 	} catch (error) {
 		process.stderr.write(`kanban hooks ingest: ${formatError(error)}\n`);
 		process.exitCode = 1;
@@ -748,7 +767,11 @@ export function registerHooksCommand(program: Command): void {
 	hooks
 		.command("ingest [payload]")
 		.description("Ingest hook event into Kanban runtime.")
-		.requiredOption("--event <event>", "Event: to_review | to_in_progress | activity.", parseHookEvent)
+		.requiredOption(
+			"--event <event>",
+			"Event: to_review | to_in_progress | activity | approval_requested.",
+			parseHookEvent,
+		)
 		.option("--source <source>", "Hook source.")
 		.option("--activity-text <text>", "Activity summary text.")
 		.option("--tool-name <name>", "Tool name.")
@@ -768,7 +791,11 @@ export function registerHooksCommand(program: Command): void {
 	hooks
 		.command("notify [payload]")
 		.description("Best-effort hook ingest that never throws.")
-		.requiredOption("--event <event>", "Event: to_review | to_in_progress | activity.", parseHookEvent)
+		.requiredOption(
+			"--event <event>",
+			"Event: to_review | to_in_progress | activity | approval_requested.",
+			parseHookEvent,
+		)
 		.option("--source <source>", "Hook source.")
 		.option("--activity-text <text>", "Activity summary text.")
 		.option("--tool-name <name>", "Tool name.")
@@ -795,7 +822,11 @@ export function registerHooksCommand(program: Command): void {
 	hooks
 		.command("codex-hook [payload]")
 		.description("Codex hook entrypoint.")
-		.requiredOption("--event <event>", "Event: to_review | to_in_progress | activity.", parseHookEvent)
+		.requiredOption(
+			"--event <event>",
+			"Event: to_review | to_in_progress | activity | approval_requested.",
+			parseHookEvent,
+		)
 		.option("--source <source>", "Hook source.")
 		.option("--activity-text <text>", "Activity summary text.")
 		.option("--tool-name <name>", "Tool name.")

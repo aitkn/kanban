@@ -10,6 +10,11 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { useTaskWorkspaceSnapshotValue } from "@/stores/workspace-metadata-store";
 import { usePersistentTerminalSession } from "@/terminal/use-persistent-terminal-session";
+import {
+	describeWaitingForApproval,
+	getFirstPendingApproval,
+	isSessionWaitingForApproval,
+} from "@/utils/pending-approval";
 import { isMacPlatform } from "@/utils/platform";
 
 interface AgentTerminalSessionControls {
@@ -61,6 +66,9 @@ function describeState(summary: RuntimeTaskSessionSummary | null): string {
 	if (summary.state === "running") {
 		return "Running";
 	}
+	if (isSessionWaitingForApproval(summary)) {
+		return describeWaitingForApproval(getFirstPendingApproval(summary));
+	}
 	if (summary.state === "awaiting_review") {
 		return "Ready for review";
 	}
@@ -73,7 +81,7 @@ function describeState(summary: RuntimeTaskSessionSummary | null): string {
 	return "Idle";
 }
 
-type StatusTagStyle = "neutral" | "success" | "warning" | "danger";
+type StatusTagStyle = "neutral" | "success" | "warning" | "approval" | "danger";
 
 function getStateTagStyle(summary: RuntimeTaskSessionSummary | null): StatusTagStyle {
 	if (!summary) {
@@ -81,6 +89,9 @@ function getStateTagStyle(summary: RuntimeTaskSessionSummary | null): StatusTagS
 	}
 	if (summary.state === "running") {
 		return "success";
+	}
+	if (isSessionWaitingForApproval(summary)) {
+		return "approval";
 	}
 	if (summary.state === "awaiting_review") {
 		return "warning";
@@ -95,6 +106,7 @@ const statusTagColors: Record<StatusTagStyle, string> = {
 	neutral: "bg-surface-3 text-text-secondary",
 	success: "bg-status-green/15 text-status-green",
 	warning: "bg-status-orange/15 text-status-orange",
+	approval: "bg-status-gold/15 text-status-gold",
 	danger: "bg-status-red/15 text-status-red",
 };
 
@@ -105,16 +117,20 @@ function AgentTerminalReviewActions({
 	onOpenPr,
 	isCommitLoading,
 	isOpenPrLoading,
+	isWaitingForApproval,
 }: {
 	taskId: string;
 	taskColumnId: string;
+	isWaitingForApproval: boolean;
 	onCommit?: () => void;
 	onOpenPr?: () => void;
 	isCommitLoading: boolean;
 	isOpenPrLoading: boolean;
 }): ReactElement | null {
 	const reviewWorkspaceSnapshot = useTaskWorkspaceSnapshotValue(taskId);
-	const showReviewGitActions = taskColumnId === "review" && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
+	// sked fork: a git action types its prompt and then Enter, which would answer an open permission dialog.
+	const showReviewGitActions =
+		taskColumnId === "review" && !isWaitingForApproval && (reviewWorkspaceSnapshot?.changedFiles ?? 0) > 0;
 
 	if (!showReviewGitActions) {
 		return null;
@@ -321,6 +337,7 @@ function AgentTerminalPanelLayout({
 					<AgentTerminalReviewActions
 						taskId={taskId}
 						taskColumnId={taskColumnId}
+						isWaitingForApproval={isSessionWaitingForApproval(summary)}
 						onCommit={onCommit}
 						onOpenPr={onOpenPr}
 						isCommitLoading={isCommitLoading}

@@ -172,6 +172,38 @@ describe("TerminalSessionManager", () => {
 		expect(entry.active.terminalProtocolFilter.pendingChunk).toBeNull();
 	});
 
+	it("keeps a card waiting for approval when the prompt is answered in its terminal", () => {
+		const manager = new TerminalSessionManager();
+		const writeSpy = vi.fn();
+		const entry = {
+			summary: createSummary({
+				taskId: "task-approval",
+				state: "awaiting_review",
+				reviewReason: "approval",
+				pendingApprovals: [{ kind: "permission", toolName: "Bash", mcpServerName: null, toolCallKey: "Bash:abc" }],
+			}),
+			active: {
+				session: {
+					write: writeSpy,
+				},
+			},
+			listenerIdCounter: 1,
+			listeners: new Map(),
+		};
+		(
+			manager as unknown as {
+				entries: Map<string, typeof entry>;
+			}
+		).entries.set("task-approval", entry);
+
+		// Enter, a digit and Esc can each be "No", which fires no hook while Claude waits for the user to type.
+		for (const input of ["\r", "1", "3", "\u001b"]) {
+			const summary = manager.writeInput("task-approval", Buffer.from(input));
+			expect(summary).toMatchObject({ state: "awaiting_review", reviewReason: "approval" });
+		}
+		expect(writeSpy).toHaveBeenCalledTimes(4);
+	});
+
 	it("forwards pixel dimensions through resize when provided", () => {
 		const manager = new TerminalSessionManager();
 		const resizeSpy = vi.fn();

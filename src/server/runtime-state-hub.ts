@@ -18,6 +18,7 @@ import type {
 	RuntimeStateStreamTaskSessionsMessage,
 	RuntimeStateStreamWorkspaceMetadataMessage,
 	RuntimeStateStreamWorkspaceStateMessage,
+	RuntimeTaskPendingApproval,
 	RuntimeTaskSessionSummary,
 } from "../core/api-contract";
 import type { TerminalSessionManager } from "../terminal/session-manager";
@@ -56,7 +57,11 @@ export interface RuntimeStateHub {
 	broadcastRuntimeProjectsUpdated: (preferredCurrentProjectId: string | null) => Promise<void>;
 	broadcastClineMcpAuthStatusesUpdated: (statuses: RuntimeClineMcpServerAuthStatus[]) => void;
 	bumpClineSessionContextVersion: () => void;
-	broadcastTaskReadyForReview: (workspaceId: string, taskId: string) => void;
+	broadcastTaskReadyForReview: (
+		workspaceId: string,
+		taskId: string,
+		pendingApproval?: RuntimeTaskPendingApproval | null,
+	) => void;
 	close: () => Promise<void>;
 }
 
@@ -322,7 +327,11 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 		}
 	};
 
-	const broadcastTaskReadyForReview = (workspaceId: string, taskId: string) => {
+	const broadcastTaskReadyForReview = (
+		workspaceId: string,
+		taskId: string,
+		pendingApproval: RuntimeTaskPendingApproval | null = null,
+	) => {
 		const runtimeClients = runtimeStateClientsByWorkspaceId.get(workspaceId);
 		if (!runtimeClients || runtimeClients.size === 0) {
 			return;
@@ -332,6 +341,7 @@ export function createRuntimeStateHub(deps: CreateRuntimeStateHubDependencies): 
 			workspaceId,
 			taskId,
 			triggeredAt: Date.now(),
+			pendingApproval,
 		};
 		for (const client of runtimeClients) {
 			sendRuntimeStateMessage(client, payload);

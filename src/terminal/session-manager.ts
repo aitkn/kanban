@@ -2,8 +2,10 @@
 // It owns process lifecycle, terminal protocol filtering, and summary updates
 // for command-driven agents such as Claude Code, Codex, Gemini, and shell sessions.
 import type {
+	RuntimeHookApprovalResolution,
 	RuntimeTaskHookActivity,
 	RuntimeTaskImage,
+	RuntimeTaskPendingApproval,
 	RuntimeTaskSessionReviewReason,
 	RuntimeTaskSessionState,
 	RuntimeTaskSessionSummary,
@@ -25,7 +27,7 @@ import { hasCodexWorkspaceTrustPrompt, shouldAutoConfirmCodexWorkspaceTrust } fr
 import { stripAnsi } from "./output-utils";
 import { type DetachedPtySession, inProcessPtyBackend, type PtyBackend, type PtyProcess } from "./pty-backend";
 import type { PtyExitEvent } from "./pty-session";
-import { reduceSessionTransition, type SessionTransitionEvent } from "./session-state-machine";
+import { getPendingApprovals, reduceSessionTransition, type SessionTransitionEvent } from "./session-state-machine";
 import {
 	createTerminalProtocolFilterState,
 	disableOscColorQueryIntercept,
@@ -74,6 +76,8 @@ interface SessionEntry {
 	suppressAutoRestartOnExit: boolean;
 	autoRestartTimestamps: number[];
 	pendingAutoRestart: Promise<void> | null;
+	// sked fork: when the user last answered a prompt this card was waiting on.
+	lastApprovalSettledAt?: number;
 }
 
 export interface StartTaskSessionRequest {
@@ -175,6 +179,8 @@ function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSum
 	};
 	return entry.summary;
 }
+
+const STALE_APPROVAL_NOTIFICATION_WINDOW_MS = 3_000;
 
 function isActiveState(state: RuntimeTaskSessionState): boolean {
 	return state === "running" || state === "awaiting_review";
@@ -991,15 +997,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 		if (reason !== "hook") {
 			return cloneSummary(entry.summary);
 		}
-		const before = entry.summary;
-		const summary = this.applySessionEvent(entry, { type: "hook.to_review" });
-		if (summary !== before && entry.active) {
-			for (const listener of entry.listeners.values()) {
-				listener.onState?.(cloneSummary(summary));
-			}
-			this.emitSummary(summary);
-		}
-		return cloneSummary(summary);
+		return cloneSummary(this.applySummaryTransition(entry, { type: "hook.to_review" }));
 	}
 
 	applyHookActivity(taskId: string, activity: Partial<RuntimeTaskHookActivity>): RuntimeTaskSessionSummary | null {
@@ -1065,20 +1063,53 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return cloneSummary(summary);
 	}
 
-	transitionToRunning(taskId: string): RuntimeTaskSessionSummary | null {
+	transitionToRunning(
+		taskId: string,
+		approvalResolution?: RuntimeHookApprovalResolution,
+	): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		if (!entry) {
 			return null;
 		}
+		return cloneSummary(this.applySummaryTransition(entry, { type: "hook.to_in_progress", approvalResolution }));
+	}
+
+	// sked fork: the agent is blocked on a permission prompt or an MCP elicitation form.
+	// `isNotification`: Claude's Notification hook, sent 6s after a prompt opened if it is still open.
+	requestApproval(
+		taskId: string,
+		approval: RuntimeTaskPendingApproval,
+		isNotification: boolean,
+	): RuntimeTaskSessionSummary | null {
+		const entry = this.entries.get(taskId);
+		if (!entry) {
+			return null;
+		}
+		// A Notification that lands just after a prompt settled is that prompt's echo; a new prompt's own
+		// Notification is 6s away. An Elicitation is keyless too, but it is the prompt itself.
+		if (
+			isNotification &&
+			entry.lastApprovalSettledAt !== undefined &&
+			now() - entry.lastApprovalSettledAt < STALE_APPROVAL_NOTIFICATION_WINDOW_MS
+		) {
+			return cloneSummary(entry.summary);
+		}
+		return cloneSummary(this.applySummaryTransition(entry, { type: "hook.approval_requested", approval }));
+	}
+
+	private applySummaryTransition(entry: SessionEntry, event: SessionTransitionEvent): RuntimeTaskSessionSummary {
 		const before = entry.summary;
-		const summary = this.applySessionEvent(entry, { type: "hook.to_in_progress" });
+		const summary = this.applySessionEvent(entry, event);
+		if (getPendingApprovals(summary).length < getPendingApprovals(before).length) {
+			entry.lastApprovalSettledAt = now();
+		}
 		if (summary !== before && entry.active) {
 			for (const listener of entry.listeners.values()) {
 				listener.onState?.(cloneSummary(summary));
 			}
 			this.emitSummary(summary);
 		}
-		return cloneSummary(summary);
+		return summary;
 	}
 
 	applyTurnCheckpoint(taskId: string, checkpoint: RuntimeTaskTurnCheckpoint): RuntimeTaskSessionSummary | null {

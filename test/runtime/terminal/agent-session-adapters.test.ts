@@ -209,6 +209,35 @@ describe("prepareAgentLaunch hook strategies", () => {
 		expect(settings.hooks?.PostToolUseFailure).toBeDefined();
 	});
 
+	it("maps Claude permission prompts and MCP elicitations to approval_requested", async () => {
+		setupTempHome();
+		await prepareAgentLaunch({
+			taskId: "task-1",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			cwd: "/tmp",
+			prompt: "",
+			workspaceId: "workspace-1",
+		});
+
+		const settingsPath = join(homedir(), ".cline", "kanban", "hooks", "claude", "settings.json");
+		const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+			hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+		};
+		const eventFor = (hookName: string, matcher?: string): string | undefined => {
+			const group = settings.hooks[hookName]?.find((entry) => entry.matcher === matcher);
+			return group?.hooks[0]?.command.match(/--event'? '?([a-z_]+)/)?.[1];
+		};
+		expect(eventFor("PermissionRequest", "*")).toBe("approval_requested");
+		expect(eventFor("Elicitation")).toBe("approval_requested");
+		expect(eventFor("Notification", "permission_prompt")).toBe("approval_requested");
+		expect(eventFor("Notification", "elicitation_dialog")).toBe("approval_requested");
+		expect(eventFor("ElicitationResult")).toBe("to_in_progress");
+		expect(eventFor("PostToolUse", "*")).toBe("to_in_progress");
+		expect(eventFor("Stop")).toBe("to_review");
+	});
+
 	it("writes Gemini settings with AfterTool mapped to to_in_progress", async () => {
 		setupTempHome();
 		await prepareAgentLaunch({

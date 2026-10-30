@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RuntimeTaskHookActivity, RuntimeTaskSessionSummary } from "../../../src/core/api-contract";
-import type { TerminalSessionManager } from "../../../src/terminal/session-manager";
+import { resolveHookApprovalSignal } from "../../../src/commands/hook-events/approval-hook-events";
+import type {
+	RuntimeHookEvent,
+	RuntimeTaskHookActivity,
+	RuntimeTaskSessionSummary,
+} from "../../../src/core/api-contract";
+import { TerminalSessionManager } from "../../../src/terminal/session-manager";
 import { createHooksApi } from "../../../src/trpc/hooks-api";
 
 function createSummary(overrides: Partial<RuntimeTaskSessionSummary> = {}): RuntimeTaskSessionSummary {
@@ -147,6 +152,157 @@ describe("createHooksApi", () => {
 			cwd: "/tmp/worktree",
 			ref: "refs/kanban/checkpoints/task-1/turn/1",
 		});
+	});
+
+	it("waits for approval through the real session manager and notifies once per prompt", async () => {
+		const manager = new TerminalSessionManager();
+		manager.hydrateFromRecord({ "task-1": createSummary() });
+		const broadcastTaskReadyForReview = vi.fn();
+		const captureTaskTurnCheckpoint = vi.fn();
+		const api = createHooksApi({
+			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
+			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			getTerminalManagerForWorkspace: vi.fn(() => manager),
+			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
+			broadcastTaskReadyForReview,
+			captureTaskTurnCheckpoint,
+		});
+		const ingest = (event: RuntimeHookEvent, payload: Record<string, unknown>) =>
+			api.ingest({
+				taskId: "task-1",
+				workspaceId: "workspace-1",
+				event,
+				metadata: { hookEventName: String(payload.hook_event_name), source: "claude" },
+				...resolveHookApprovalSignal(event, payload),
+			});
+		const request = {
+			hook_event_name: "PermissionRequest",
+			tool_name: "Bash",
+			tool_input: { command: "npm publish" },
+		};
+
+		expect(await ingest("approval_requested", request)).toEqual({ ok: true });
+		expect(manager.getSummary("task-1")).toMatchObject({ state: "awaiting_review", reviewReason: "approval" });
+		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(1);
+		expect(broadcastTaskReadyForReview).toHaveBeenCalledWith(
+			"workspace-1",
+			"task-1",
+			expect.objectContaining({ kind: "permission", toolName: "Bash" }),
+		);
+		// Waiting is not a finished turn: no diff checkpoint.
+		expect(captureTaskTurnCheckpoint).not.toHaveBeenCalled();
+
+		await ingest("approval_requested", { hook_event_name: "Notification", notification_type: "permission_prompt" });
+		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(1);
+
+		await ingest("to_in_progress", {
+			hook_event_name: "PostToolUse",
+			tool_name: "Read",
+			tool_input: { file_path: "/tmp/a" },
+			agent_id: "subagent-1",
+		});
+		expect(manager.getSummary("task-1")?.reviewReason).toBe("approval");
+
+		await ingest("to_in_progress", { ...request, hook_event_name: "PostToolUse", tool_use_id: "toolu_1" });
+		expect(manager.getSummary("task-1")).toMatchObject({ state: "running", reviewReason: null });
+
+		// The answered prompt's own Notification, landing just after the answer, does not block the card again.
+		await ingest("approval_requested", { hook_event_name: "Notification", notification_type: "permission_prompt" });
+		expect(manager.getSummary("task-1")?.state).toBe("running");
+		// A new prompt does.
+		await ingest("approval_requested", { ...request, tool_input: { command: "npm publish --tag next" } });
+		expect(manager.getSummary("task-1")?.reviewReason).toBe("approval");
+		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(2);
+	});
+
+	it("shows a background subagent's permission prompt on a card waiting on background work", async () => {
+		const manager = new TerminalSessionManager();
+		manager.hydrateFromRecord({ "task-1": createSummary() });
+		const api = createHooksApi({
+			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
+			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			getTerminalManagerForWorkspace: vi.fn(() => manager),
+			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
+			broadcastTaskReadyForReview: vi.fn(),
+			captureTaskTurnCheckpoint: vi.fn(async () => ({ turn: 1, ref: "r", commit: "c", createdAt: 1 })),
+			backgroundWorkHolds: { readTranscriptFrom: async () => ({ text: "", nextOffset: 0 }) },
+		});
+		const ingest = (event: RuntimeHookEvent, payload: Record<string, unknown>, activityText?: string) =>
+			api.ingest({
+				taskId: "task-1",
+				workspaceId: "workspace-1",
+				event,
+				metadata: { hookEventName: String(payload.hook_event_name), source: "claude", activityText },
+				...resolveHookApprovalSignal(event, payload),
+			});
+
+		await api.ingest({
+			taskId: "task-1",
+			workspaceId: "workspace-1",
+			event: "to_review",
+			metadata: { hookEventName: "Stop", source: "claude" },
+			backgroundWork: { taskIds: ["a1"], transcriptPath: "/t.jsonl" },
+		});
+		expect(manager.getSummary("task-1")?.state).toBe("running");
+		expect(manager.getSummary("task-1")?.latestHookActivity?.activityText).toBe("Waiting on background job (1)");
+
+		const request = {
+			hook_event_name: "PermissionRequest",
+			tool_name: "Bash",
+			tool_input: { command: "npm publish" },
+			agent_id: "a1",
+		};
+		await ingest("approval_requested", request, "Waiting for approval");
+		expect(manager.getSummary("task-1")).toMatchObject({ state: "awaiting_review", reviewReason: "approval" });
+		expect(manager.getSummary("task-1")?.latestHookActivity?.activityText).toBe("Waiting for approval");
+
+		await ingest(
+			"to_in_progress",
+			{ ...request, hook_event_name: "PostToolUse", tool_use_id: "toolu_1" },
+			"Completed Bash: npm publish",
+		);
+		expect(manager.getSummary("task-1")).toMatchObject({ state: "running", reviewReason: null });
+		// The prompt ended the hold, so the card shows what the agent does next again.
+		expect(manager.getSummary("task-1")?.latestHookActivity?.activityText).toBe("Completed Bash: npm publish");
+
+		// Claude resumes for the finished subagent and ends the turn with nothing outstanding.
+		await ingest("to_review", { hook_event_name: "Stop" });
+		expect(manager.getSummary("task-1")).toMatchObject({ state: "awaiting_review", reviewReason: "hook" });
+	});
+
+	it("blocks on an MCP form that opens right after a prompt settled", async () => {
+		const manager = new TerminalSessionManager();
+		manager.hydrateFromRecord({ "task-1": createSummary() });
+		const broadcastTaskReadyForReview = vi.fn();
+		const api = createHooksApi({
+			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
+			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			getTerminalManagerForWorkspace: vi.fn(() => manager),
+			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
+			broadcastTaskReadyForReview,
+			captureTaskTurnCheckpoint: vi.fn(),
+		});
+		const ingest = (event: RuntimeHookEvent, payload: Record<string, unknown>) =>
+			api.ingest({
+				taskId: "task-1",
+				workspaceId: "workspace-1",
+				event,
+				metadata: { hookEventName: String(payload.hook_event_name), source: "claude" },
+				...resolveHookApprovalSignal(event, payload),
+			});
+		const request = { hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "ls" } };
+
+		await ingest("approval_requested", request);
+		await ingest("to_in_progress", { ...request, hook_event_name: "PostToolUse", tool_use_id: "toolu_1" });
+		expect(manager.getSummary("task-1")?.state).toBe("running");
+
+		// Keyless like the Notification echo, but it is the form itself.
+		await ingest("approval_requested", {
+			hook_event_name: "Elicitation",
+			mcp_server_name: "plugin:supabase:supabase",
+		});
+		expect(manager.getSummary("task-1")).toMatchObject({ state: "awaiting_review", reviewReason: "approval" });
+		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(2);
 	});
 });
 

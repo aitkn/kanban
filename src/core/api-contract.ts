@@ -255,8 +255,10 @@ export type RuntimeTaskSessionState = z.infer<typeof runtimeTaskSessionStateSche
 export const runtimeTaskSessionModeSchema = z.enum(["act", "plan"]);
 export type RuntimeTaskSessionMode = z.infer<typeof runtimeTaskSessionModeSchema>;
 
+// sked fork: "approval" means the agent is blocked on the user (a permission prompt or an MCP elicitation
+// form), as opposed to "hook", which means the agent finished its turn and the diff is ready for review.
 export const runtimeTaskSessionReviewReasonSchema = z
-	.enum(["attention", "exit", "error", "interrupted", "hook"])
+	.enum(["attention", "exit", "error", "interrupted", "hook", "approval"])
 	.nullable();
 export type RuntimeTaskSessionReviewReason = z.infer<typeof runtimeTaskSessionReviewReasonSchema>;
 
@@ -270,6 +272,16 @@ export const runtimeTaskHookActivitySchema = z.object({
 	source: z.string().nullable().default(null),
 });
 export type RuntimeTaskHookActivity = z.infer<typeof runtimeTaskHookActivitySchema>;
+
+// sked fork: one prompt the agent is waiting on. toolCallKey identifies the tool call (tool name plus a hash
+// of its input), because Claude's PermissionRequest payload carries no tool_use_id.
+export const runtimeTaskPendingApprovalSchema = z.object({
+	kind: z.enum(["permission", "elicitation"]),
+	toolName: z.string().nullable(),
+	mcpServerName: z.string().nullable(),
+	toolCallKey: z.string().nullable(),
+});
+export type RuntimeTaskPendingApproval = z.infer<typeof runtimeTaskPendingApprovalSchema>;
 
 export const runtimeTaskTurnCheckpointSchema = z.object({
 	turn: z.number().int().positive(),
@@ -293,6 +305,7 @@ export const runtimeTaskSessionSummarySchema = z.object({
 	exitCode: z.number().nullable(),
 	lastHookAt: z.number().nullable().default(null),
 	latestHookActivity: runtimeTaskHookActivitySchema.nullable().default(null),
+	pendingApprovals: z.array(runtimeTaskPendingApprovalSchema).optional(),
 	warningMessage: z.string().nullable().optional(),
 	latestTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),
 	previousTurnCheckpoint: runtimeTaskTurnCheckpointSchema.nullable().optional(),
@@ -419,6 +432,7 @@ export const runtimeStateStreamTaskReadyForReviewMessageSchema = z.object({
 	workspaceId: z.string(),
 	taskId: z.string(),
 	triggeredAt: z.number(),
+	pendingApproval: runtimeTaskPendingApprovalSchema.nullable().optional(),
 });
 export type RuntimeStateStreamTaskReadyForReviewMessage = z.infer<
 	typeof runtimeStateStreamTaskReadyForReviewMessageSchema
@@ -1259,7 +1273,7 @@ export const runtimeGitRefsResponseSchema = z.object({
 });
 export type RuntimeGitRefsResponse = z.infer<typeof runtimeGitRefsResponseSchema>;
 
-export const runtimeHookEventSchema = z.enum(["to_review", "to_in_progress", "activity"]);
+export const runtimeHookEventSchema = z.enum(["to_review", "to_in_progress", "activity", "approval_requested"]);
 export type RuntimeHookEvent = z.infer<typeof runtimeHookEventSchema>;
 
 // sked fork: background work the agent's turn ended on (Claude's Stop `background_tasks`), so a
@@ -1269,6 +1283,13 @@ export const runtimeHookBackgroundWorkSchema = z.object({
 	transcriptPath: z.string().nullable(),
 });
 export type RuntimeHookBackgroundWork = z.infer<typeof runtimeHookBackgroundWorkSchema>;
+// sked fork: which pending approvals a to_in_progress event resolves. Absent means all of them
+// (UserPromptSubmit and every non-Claude agent).
+export const runtimeHookApprovalResolutionSchema = z.discriminatedUnion("scope", [
+	z.object({ scope: z.literal("tool_call"), toolCallKey: z.string() }),
+	z.object({ scope: z.literal("elicitation"), mcpServerName: z.string().nullable() }),
+]);
+export type RuntimeHookApprovalResolution = z.infer<typeof runtimeHookApprovalResolutionSchema>;
 
 export const runtimeHookIngestRequestSchema = z.object({
 	taskId: z.string(),
@@ -1276,6 +1297,8 @@ export const runtimeHookIngestRequestSchema = z.object({
 	event: runtimeHookEventSchema,
 	metadata: runtimeTaskHookActivitySchema.partial().optional(),
 	backgroundWork: runtimeHookBackgroundWorkSchema.optional(),
+	approval: runtimeTaskPendingApprovalSchema.optional(),
+	approvalResolution: runtimeHookApprovalResolutionSchema.optional(),
 });
 export type RuntimeHookIngestRequest = z.infer<typeof runtimeHookIngestRequestSchema>;
 

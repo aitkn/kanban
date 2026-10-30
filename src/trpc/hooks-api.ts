@@ -1,13 +1,17 @@
 import type {
+	RuntimeHookApprovalResolution,
 	RuntimeHookEvent,
+	RuntimeHookIngestRequest,
 	RuntimeHookIngestResponse,
 	RuntimeTaskHookActivity,
+	RuntimeTaskPendingApproval,
 	RuntimeTaskSessionSummary,
 	RuntimeTaskTurnCheckpoint,
 } from "../core/api-contract";
 import { parseHookIngestRequest } from "../core/api-validation";
 import { loadWorkspaceContextById } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
+import { getPendingApprovals } from "../terminal/session-state-machine";
 import { captureTaskTurnCheckpoint, deleteTaskTurnCheckpointRef } from "../workspace/turn-checkpoints";
 import type { RuntimeTrpcContext } from "./app-router";
 import {
@@ -23,7 +27,11 @@ export interface CreateHooksApiDependencies {
 	/** Looks a workspace's manager up without registering or loading it. */
 	getTerminalManagerForWorkspace: (workspaceId: string) => TerminalSessionManager | null;
 	broadcastRuntimeWorkspaceStateUpdated: (workspaceId: string, workspacePath: string) => Promise<void> | void;
-	broadcastTaskReadyForReview: (workspaceId: string, taskId: string) => void;
+	broadcastTaskReadyForReview: (
+		workspaceId: string,
+		taskId: string,
+		pendingApproval?: RuntimeTaskPendingApproval | null,
+	) => void;
 	captureTaskTurnCheckpoint?: (input: {
 		cwd: string;
 		taskId: string;
@@ -41,12 +49,37 @@ function canTransitionTaskForHookEvent(summary: RuntimeTaskSessionSummary, event
 		return false;
 	}
 	if (event === "to_review") {
-		return summary.state === "running";
+		return summary.state === "running" || isWaitingForApproval(summary);
+	}
+	if (event === "approval_requested") {
+		return summary.state === "running" || summary.state === "awaiting_review";
 	}
 	return (
 		summary.state === "awaiting_review" &&
-		(summary.reviewReason === "attention" || summary.reviewReason === "hook" || summary.reviewReason === "error")
+		(summary.reviewReason === "attention" ||
+			summary.reviewReason === "hook" ||
+			summary.reviewReason === "error" ||
+			summary.reviewReason === "approval")
 	);
+}
+
+function isWaitingForApproval(summary: RuntimeTaskSessionSummary): boolean {
+	return summary.state === "awaiting_review" && summary.reviewReason === "approval";
+}
+
+// sked fork: an approval request without a structured payload (an older hook command) still blocks the card.
+function resolveRequestedApproval(body: RuntimeHookIngestRequest): RuntimeTaskPendingApproval {
+	if (body.approval) {
+		return body.approval;
+	}
+	const isElicitation =
+		body.metadata?.hookEventName === "Elicitation" || body.metadata?.notificationType === "elicitation_dialog";
+	return {
+		kind: isElicitation ? "elicitation" : "permission",
+		toolName: isElicitation ? null : (body.metadata?.toolName ?? null),
+		mcpServerName: null,
+		toolCallKey: null,
+	};
 }
 
 /** Keeps per-card background-work holds: create one per runtime, never one per request. */
@@ -87,11 +120,12 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 		target: BackgroundWorkHoldTarget,
 		event: RuntimeHookEvent,
 		metadata: Partial<RuntimeTaskHookActivity> | undefined,
+		approvalResolution?: RuntimeHookApprovalResolution,
 	): Promise<boolean> => {
 		const transitionedSummary =
 			event === "to_review"
 				? manager.transitionToReview(target.taskId, "hook")
-				: manager.transitionToRunning(target.taskId);
+				: manager.transitionToRunning(target.taskId, approvalResolution);
 		if (!transitionedSummary) {
 			return false;
 		}
@@ -180,9 +214,10 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 				}
 				if (
 					event === "to_review" ||
+					event === "approval_requested" ||
 					(event === "to_in_progress" && metadata?.hookEventName === "UserPromptSubmit")
 				) {
-					// The turn ended with nothing outstanding, the agent needs the user, or a new turn started.
+					// The turn ended with nothing outstanding, the agent is blocked on the user, or a new turn started.
 					backgroundWorkHolds.release(target);
 				} else if (metadata?.activityText && backgroundWorkHolds.isHeld(target)) {
 					// Keep "Waiting on background job" while background subagents and idle notifications report in.
@@ -199,7 +234,25 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 					} satisfies RuntimeHookIngestResponse;
 				}
 
-				const transitioned = await applyTransition(manager, target, event, metadata);
+				if (event === "approval_requested") {
+					const approvalSummary = manager.requestApproval(
+						taskId,
+						resolveRequestedApproval(body),
+						body.metadata?.hookEventName === "Notification",
+					);
+					if (body.metadata) {
+						manager.applyHookActivity(taskId, body.metadata);
+					}
+					void deps.broadcastRuntimeWorkspaceStateUpdated(workspaceId, workspacePath);
+					// Notify once per wait: Claude's follow-up Notification for the same prompt changes nothing.
+					const pendingApprovals = approvalSummary ? getPendingApprovals(approvalSummary) : [];
+					if (pendingApprovals.length > getPendingApprovals(summary).length) {
+						deps.broadcastTaskReadyForReview(workspaceId, taskId, pendingApprovals.at(-1) ?? null);
+					}
+					return { ok: true } satisfies RuntimeHookIngestResponse;
+				}
+
+				const transitioned = await applyTransition(manager, target, event, metadata, body.approvalResolution);
 				if (!transitioned) {
 					return {
 						ok: false,
