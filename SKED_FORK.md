@@ -93,7 +93,8 @@ this state, and its Commit / Open PR buttons are hidden, because their trailing 
 open dialog.
 
 Claude's `PermissionRequest` payload has no `tool_use_id`, so a prompt is matched to its tool call by
-tool name plus a hash of the tool input. Answering in the terminal does not release the card: a "No"
+tool name plus a hash of the tool input (`AskUserQuestion` and `ExitPlanMode` by name alone, because
+Claude rewrites their input before `PostToolUse`). Answering in the terminal does not release the card: a "No"
 fires no hook while Claude waits for the user to type, and the keypress cannot tell it from "Yes". So
 after a "Yes" the card keeps waiting until the approved tool finishes.
 

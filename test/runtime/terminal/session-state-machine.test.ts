@@ -177,6 +177,31 @@ describe("session state machine: waiting for approval", () => {
 		expect(summary.state).toBe("running");
 	});
 
+	it("releases AskUserQuestion and ExitPlanMode on their PostToolUse, whose input Claude rewrites", () => {
+		// Recorded from Claude Code 2.1.314: the answers are added to AskUserQuestion's input, and
+		// ExitPlanMode's PostToolUse input is empty.
+		const question = {
+			questions: [{ question: "Pick a color", header: "Color", options: [{ label: "red" }, { label: "blue" }] }],
+		};
+		const askRequest = { hook_event_name: "PermissionRequest", tool_name: "AskUserQuestion", tool_input: question };
+		const askPost = {
+			hook_event_name: "PostToolUse",
+			tool_name: "AskUserQuestion",
+			tool_input: { ...question, answers: { "Pick a color": "red" } },
+		};
+		const planRequest = {
+			hook_event_name: "PermissionRequest",
+			tool_name: "ExitPlanMode",
+			tool_input: { plan: "Create color.txt", planFilePath: "/tmp/plan.md" },
+		};
+		const planPost = { hook_event_name: "PostToolUse", tool_name: "ExitPlanMode", tool_input: {} };
+
+		const asked = apply(createSummary(), hookEvent("approval_requested", askRequest));
+		expect(apply(asked, hookEvent("to_in_progress", askPost)).state).toBe("running");
+		const planning = apply(createSummary(), hookEvent("approval_requested", planRequest));
+		expect(apply(planning, hookEvent("to_in_progress", planPost)).state).toBe("running");
+	});
+
 	it("treats the same tool with different input as a different call", () => {
 		const sameToolOtherInput = { ...postToolUsePeek, tool_input: { verbose: true } };
 		expect(reduceSessionTransition(waitingForPeek(), hookEvent("to_in_progress", sameToolOtherInput)).changed).toBe(

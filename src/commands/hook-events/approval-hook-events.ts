@@ -2,7 +2,7 @@
 //
 // Verified against Claude Code 2.1.314 payloads:
 // - PermissionRequest carries tool_name, tool_input and mcp_server, but no tool_use_id. A prompt is therefore
-//   matched to its PostToolUse by tool name plus a hash of the tool input.
+//   matched to its PostToolUse by tool name plus a hash of the tool input, except for the tools below.
 // - Elicitation and ElicitationResult carry mcp_server_name and no tool fields. ElicitationResult fired for
 //   accept and cancel (decline not checked).
 // - Notification permission_prompt / elicitation_dialog carry neither; they fire ~6s after the prompt opens
@@ -34,7 +34,14 @@ function stableStringify(value: unknown): string {
 	return JSON.stringify(value ?? null);
 }
 
+// These tools' PostToolUse input is not what was asked: AskUserQuestion adds the user's answers, and
+// ExitPlanMode reports {}. They are dialogs, not side effects, so the tool name alone is the key.
+const TOOLS_WITH_REWRITTEN_INPUT = new Set(["AskUserQuestion", "ExitPlanMode"]);
+
 export function buildToolCallKey(toolName: string, toolInput: unknown): string {
+	if (TOOLS_WITH_REWRITTEN_INPUT.has(toolName)) {
+		return toolName;
+	}
 	const digest = createHash("sha256").update(stableStringify(toolInput)).digest("hex").slice(0, 16);
 	return `${toolName}:${digest}`;
 }
