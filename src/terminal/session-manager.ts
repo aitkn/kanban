@@ -2,8 +2,10 @@
 // It owns process lifecycle, terminal protocol filtering, and summary updates
 // for command-driven agents such as Claude Code, Codex, Gemini, and shell sessions.
 import type {
+	RuntimeHookApprovalResolution,
 	RuntimeTaskHookActivity,
 	RuntimeTaskImage,
+	RuntimeTaskPendingApproval,
 	RuntimeTaskSessionReviewReason,
 	RuntimeTaskSessionState,
 	RuntimeTaskSessionSummary,
@@ -25,7 +27,7 @@ import { hasCodexWorkspaceTrustPrompt, shouldAutoConfirmCodexWorkspaceTrust } fr
 import { stripAnsi } from "./output-utils";
 import { type DetachedPtySession, inProcessPtyBackend, type PtyBackend, type PtyProcess } from "./pty-backend";
 import type { PtyExitEvent } from "./pty-session";
-import { reduceSessionTransition, type SessionTransitionEvent } from "./session-state-machine";
+import { getPendingApprovals, reduceSessionTransition, type SessionTransitionEvent } from "./session-state-machine";
 import {
 	createTerminalProtocolFilterState,
 	disableOscColorQueryIntercept,
@@ -74,6 +76,8 @@ interface SessionEntry {
 	suppressAutoRestartOnExit: boolean;
 	autoRestartTimestamps: number[];
 	pendingAutoRestart: Promise<void> | null;
+	// sked fork: when the user last answered a prompt this card was waiting on.
+	lastApprovalSettledAt?: number;
 }
 
 export interface StartTaskSessionRequest {
@@ -174,6 +178,21 @@ function updateSummary(entry: SessionEntry, patch: Partial<RuntimeTaskSessionSum
 		updatedAt: now(),
 	};
 	return entry.summary;
+}
+
+const STALE_APPROVAL_NOTIFICATION_WINDOW_MS = 3_000;
+
+// Enter, a lone Escape, or a digit (Claude's permission dialog selects "1. Yes" on the digit alone). Arrow
+// keys arrive as one multi-byte chunk, so moving through the options is not an answer.
+function isPermissionPromptAnswerInput(data: Buffer): boolean {
+	if (data.includes(13) || data.includes(10)) {
+		return true;
+	}
+	if (data.length !== 1) {
+		return false;
+	}
+	const byte = data[0];
+	return byte === 0x1b || (byte !== undefined && byte >= 0x31 && byte <= 0x39);
 }
 
 function isActiveState(state: RuntimeTaskSessionState): boolean {
@@ -942,6 +961,11 @@ export class TerminalSessionManager implements TerminalSessionService {
 			entry.active.awaitingCodexPromptAfterEnter = true;
 		}
 		entry.active.session.write(data);
+		// sked fork: Claude reports no event when a permission prompt is answered, only PostToolUse once the
+		// tool finishes (or nothing at all on "No"). The keypress that answers it is the earliest signal.
+		if (isPermissionPromptAnswerInput(data)) {
+			this.applySummaryTransition(entry, { type: "user.approval-answered" });
+		}
 		return cloneSummary(entry.summary);
 	}
 
@@ -991,15 +1015,7 @@ export class TerminalSessionManager implements TerminalSessionService {
 		if (reason !== "hook") {
 			return cloneSummary(entry.summary);
 		}
-		const before = entry.summary;
-		const summary = this.applySessionEvent(entry, { type: "hook.to_review" });
-		if (summary !== before && entry.active) {
-			for (const listener of entry.listeners.values()) {
-				listener.onState?.(cloneSummary(summary));
-			}
-			this.emitSummary(summary);
-		}
-		return cloneSummary(summary);
+		return cloneSummary(this.applySummaryTransition(entry, { type: "hook.to_review" }));
 	}
 
 	applyHookActivity(taskId: string, activity: Partial<RuntimeTaskHookActivity>): RuntimeTaskSessionSummary | null {
@@ -1065,20 +1081,48 @@ export class TerminalSessionManager implements TerminalSessionService {
 		return cloneSummary(summary);
 	}
 
-	transitionToRunning(taskId: string): RuntimeTaskSessionSummary | null {
+	transitionToRunning(
+		taskId: string,
+		approvalResolution?: RuntimeHookApprovalResolution,
+	): RuntimeTaskSessionSummary | null {
 		const entry = this.entries.get(taskId);
 		if (!entry) {
 			return null;
 		}
+		return cloneSummary(this.applySummaryTransition(entry, { type: "hook.to_in_progress", approvalResolution }));
+	}
+
+	// sked fork: the agent is blocked on a permission prompt or an MCP elicitation form.
+	requestApproval(taskId: string, approval: RuntimeTaskPendingApproval): RuntimeTaskSessionSummary | null {
+		const entry = this.entries.get(taskId);
+		if (!entry) {
+			return null;
+		}
+		// A keyless request is Claude's Notification, sent 6s after a prompt opened. One that lands just after
+		// the prompt was answered is that answered prompt's echo; a new prompt's own Notification is 6s away.
+		if (
+			approval.toolCallKey === null &&
+			entry.lastApprovalSettledAt !== undefined &&
+			now() - entry.lastApprovalSettledAt < STALE_APPROVAL_NOTIFICATION_WINDOW_MS
+		) {
+			return cloneSummary(entry.summary);
+		}
+		return cloneSummary(this.applySummaryTransition(entry, { type: "hook.approval_requested", approval }));
+	}
+
+	private applySummaryTransition(entry: SessionEntry, event: SessionTransitionEvent): RuntimeTaskSessionSummary {
 		const before = entry.summary;
-		const summary = this.applySessionEvent(entry, { type: "hook.to_in_progress" });
+		const summary = this.applySessionEvent(entry, event);
+		if (getPendingApprovals(summary).length < getPendingApprovals(before).length) {
+			entry.lastApprovalSettledAt = now();
+		}
 		if (summary !== before && entry.active) {
 			for (const listener of entry.listeners.values()) {
 				listener.onState?.(cloneSummary(summary));
 			}
 			this.emitSummary(summary);
 		}
-		return cloneSummary(summary);
+		return summary;
 	}
 
 	applyTurnCheckpoint(taskId: string, checkpoint: RuntimeTaskTurnCheckpoint): RuntimeTaskSessionSummary | null {

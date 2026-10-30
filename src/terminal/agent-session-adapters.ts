@@ -660,10 +660,26 @@ const claudeAdapter: AgentSessionAdapter = {
 							hooks: [{ type: "command", command: buildHookCommand("activity", { source: "claude" }) }],
 						},
 					],
+					// sked fork: a prompt the user must answer is "approval_requested", not "to_review", so the card
+					// says it is blocked and only the answer (or that tool call finishing) releases it.
 					PermissionRequest: [
 						{
 							matcher: "*",
-							hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }],
+							hooks: [
+								{ type: "command", command: buildHookCommand("approval_requested", { source: "claude" }) },
+							],
+						},
+					],
+					Elicitation: [
+						{
+							hooks: [
+								{ type: "command", command: buildHookCommand("approval_requested", { source: "claude" }) },
+							],
+						},
+					],
+					ElicitationResult: [
+						{
+							hooks: [{ type: "command", command: buildHookCommand("to_in_progress", { source: "claude" }) }],
 						},
 					],
 					PostToolUse: [
@@ -681,7 +697,15 @@ const claudeAdapter: AgentSessionAdapter = {
 					Notification: [
 						{
 							matcher: "permission_prompt",
-							hooks: [{ type: "command", command: buildHookCommand("to_review", { source: "claude" }) }],
+							hooks: [
+								{ type: "command", command: buildHookCommand("approval_requested", { source: "claude" }) },
+							],
+						},
+						{
+							matcher: "elicitation_dialog",
+							hooks: [
+								{ type: "command", command: buildHookCommand("approval_requested", { source: "claude" }) },
+							],
 						},
 						{
 							matcher: "*",
