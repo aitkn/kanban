@@ -215,6 +215,20 @@ describe("readTranscriptFrom", () => {
 		expect(second).toEqual({ text: '{"b":2}\n', nextOffset: 16 });
 	});
 
+	it("skips a line longer than one read window instead of stopping on it", async () => {
+		const path = join(directory, "t.jsonl");
+		const notification = '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>"}\n';
+		await writeFile(path, `${"x".repeat(5 * 1024 * 1024)}\n${notification}`);
+		let offset = 0;
+		const texts: string[] = [];
+		for (let reads = 0; reads < 5; reads += 1) {
+			const chunk = await readTranscriptFrom(path, offset);
+			texts.push(chunk?.text ?? "");
+			offset = chunk?.nextOffset ?? offset;
+		}
+		expect(texts.join("")).toContain(notification);
+	});
+
 	it("starts at the end when asked past it, and returns null for a missing file", async () => {
 		const path = join(directory, "t.jsonl");
 		await writeFile(path, '{"a":1}\n');

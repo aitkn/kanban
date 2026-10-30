@@ -34,6 +34,7 @@ describe("createHooksApi", () => {
 		const api = createHooksApi({
 			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
 			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			getTerminalManagerForWorkspace: vi.fn(() => manager),
 			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
 			broadcastTaskReadyForReview: vi.fn(),
 		});
@@ -61,6 +62,7 @@ describe("createHooksApi", () => {
 		const api = createHooksApi({
 			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
 			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			getTerminalManagerForWorkspace: vi.fn(() => manager),
 			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
 			broadcastTaskReadyForReview: vi.fn(),
 		});
@@ -121,6 +123,7 @@ describe("createHooksApi", () => {
 		const api = createHooksApi({
 			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
 			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			getTerminalManagerForWorkspace: vi.fn(() => manager),
 			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
 			broadcastTaskReadyForReview: vi.fn(),
 			captureTaskTurnCheckpoint,
@@ -154,6 +157,10 @@ describe("createHooksApi Claude Stop with background work", () => {
 	let manager: TerminalSessionManager;
 	let broadcastTaskReadyForReview: ReturnType<typeof vi.fn<(workspaceId: string, taskId: string) => void>>;
 	let api: ReturnType<typeof createHooksApi>;
+	let projectRegistered: boolean;
+	let ensureTerminalManagerForWorkspace: ReturnType<
+		typeof vi.fn<(workspaceId: string, repoPath: string) => Promise<TerminalSessionManager>>
+	>;
 
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -190,9 +197,12 @@ describe("createHooksApi Claude Stop with background work", () => {
 			applyTurnCheckpoint: vi.fn(),
 		} as unknown as TerminalSessionManager;
 		broadcastTaskReadyForReview = vi.fn<(workspaceId: string, taskId: string) => void>();
+		projectRegistered = true;
+		ensureTerminalManagerForWorkspace = vi.fn(async () => manager);
 		api = createHooksApi({
 			getWorkspacePathById: vi.fn(() => "/tmp/repo"),
-			ensureTerminalManagerForWorkspace: vi.fn(async () => manager),
+			ensureTerminalManagerForWorkspace,
+			getTerminalManagerForWorkspace: vi.fn(() => (projectRegistered ? manager : null)),
 			broadcastRuntimeWorkspaceStateUpdated: vi.fn(),
 			broadcastTaskReadyForReview,
 			captureTaskTurnCheckpoint: vi.fn(async () => ({ turn: 1, ref: "r", commit: "c", createdAt: 1 })),
@@ -299,6 +309,22 @@ describe("createHooksApi Claude Stop with background work", () => {
 		expect(summary.state).toBe("awaiting_review");
 		expect(summary.latestHookActivity?.activityText).toBe("Final: Started it.");
 		expect(broadcastTaskReadyForReview).toHaveBeenCalledTimes(1);
+	});
+
+	it("drops the hold without reloading a project removed while the card was held", async () => {
+		await stop(["b1"]);
+		expect(ensureTerminalManagerForWorkspace).toHaveBeenCalledTimes(1);
+		projectRegistered = false;
+		transcript += `${JSON.stringify({
+			type: "queue-operation",
+			operation: "enqueue",
+			timestamp: new Date(Date.now()).toISOString(),
+			content: "<task-notification>\n<task-id>b1</task-id>\n<status>killed</status>\n</task-notification>",
+		})}\n`;
+
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(ensureTerminalManagerForWorkspace).toHaveBeenCalledTimes(1);
+		expect(manager.transitionToReview).not.toHaveBeenCalled();
 	});
 
 	it("falls back to review when the work cannot be re-checked", async () => {

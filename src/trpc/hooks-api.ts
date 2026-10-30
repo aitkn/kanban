@@ -20,6 +20,8 @@ import {
 export interface CreateHooksApiDependencies {
 	getWorkspacePathById: (workspaceId: string) => string | null;
 	ensureTerminalManagerForWorkspace: (workspaceId: string, repoPath: string) => Promise<TerminalSessionManager>;
+	/** Looks a workspace's manager up without registering or loading it. */
+	getTerminalManagerForWorkspace: (workspaceId: string) => TerminalSessionManager | null;
 	broadcastRuntimeWorkspaceStateUpdated: (workspaceId: string, workspacePath: string) => Promise<void> | void;
 	broadcastTaskReadyForReview: (workspaceId: string, taskId: string) => void;
 	captureTaskTurnCheckpoint?: (input: {
@@ -108,31 +110,24 @@ export function createHooksApi(deps: CreateHooksApiDependencies): RuntimeTrpcCon
 
 	const backgroundWorkHolds = new BackgroundWorkHolds({
 		...deps.backgroundWorkHolds,
+		// Re-checks only look managers up: a project removed while a card was held must stay removed,
+		// and its session is gone with it.
 		isSessionCurrent: async (target, pid) => {
-			const manager = await deps.ensureTerminalManagerForWorkspace(target.workspaceId, target.workspacePath);
-			const summary = manager.getSummary(target.taskId);
+			const summary = deps.getTerminalManagerForWorkspace(target.workspaceId)?.getSummary(target.taskId);
 			return summary?.state === "running" && summary.pid === pid;
 		},
 		onProgress: (target, outstandingCount) => {
-			void deps
-				.ensureTerminalManagerForWorkspace(target.workspaceId, target.workspacePath)
-				.then((manager) => {
-					manager.applyHookActivity(target.taskId, {
-						activityText: formatBackgroundWorkActivity(outstandingCount),
-					});
-				})
-				.catch(() => {
-					// Best effort activity text only.
-				});
+			deps.getTerminalManagerForWorkspace(target.workspaceId)?.applyHookActivity(target.taskId, {
+				activityText: formatBackgroundWorkActivity(outstandingCount),
+			});
 		},
 		onSettled: (target, reviewMetadata) => {
-			void (async () => {
-				const manager = await deps.ensureTerminalManagerForWorkspace(target.workspaceId, target.workspacePath);
-				const summary = manager.getSummary(target.taskId);
-				if (summary && canTransitionTaskForHookEvent(summary, "to_review")) {
-					await applyTransition(manager, target, "to_review", reviewMetadata);
-				}
-			})().catch(() => {
+			const manager = deps.getTerminalManagerForWorkspace(target.workspaceId);
+			const summary = manager?.getSummary(target.taskId);
+			if (!manager || !summary || !canTransitionTaskForHookEvent(summary, "to_review")) {
+				return;
+			}
+			void applyTransition(manager, target, "to_review", reviewMetadata).catch(() => {
 				// Best effort, like every hook transition.
 			});
 		},

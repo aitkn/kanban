@@ -193,6 +193,7 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 	const hooksApi = createHooksApi({
 		getWorkspacePathById: deps.workspaceRegistry.getWorkspacePathById,
 		ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
+		getTerminalManagerForWorkspace: deps.workspaceRegistry.getTerminalManagerForWorkspace,
 		broadcastRuntimeWorkspaceStateUpdated: deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated,
 		broadcastTaskReadyForReview: deps.runtimeStateHub.broadcastTaskReadyForReview,
 	});

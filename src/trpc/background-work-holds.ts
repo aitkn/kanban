@@ -72,7 +72,9 @@ export async function readTranscriptFrom(path: string, offset: number): Promise<
 		const { bytesRead } = await handle.read(buffer, 0, length, start);
 		const lastNewline = buffer.lastIndexOf(0x0a, bytesRead - 1);
 		if (lastNewline < 0) {
-			return { text: "", nextOffset: start };
+			// A full window without a newline is one huge line, never a task notification: skip it,
+			// or every later re-check would stop on it. A short one is a line still being written.
+			return { text: "", nextOffset: bytesRead === MAX_READ_BYTES ? start + bytesRead : start };
 		}
 		return {
 			text: buffer.subarray(0, lastNewline + 1).toString("utf8"),
