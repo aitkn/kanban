@@ -95,6 +95,13 @@ field, or a transcript Kanban cannot read, gets the upstream behaviour. A job th
 In Progress, labelled with the number of jobs it is waiting on. A Kanban restart forgets the re-check;
 the card then waits for Claude's next Stop.
 
+This is deliberate for jobs meant to run forever too: a dev server, a watcher, `tail -f` or a persistent
+Monitor started in the background keeps the card In Progress, labelled "Waiting on background job (N)",
+for as long as it runs. The card never reaches Review on its own, and that includes a turn that ends
+with Claude asking you a question, so no ready-for-review signal fires. Stop the job (Claude's `/tasks`)
+or move the card yourself. Moving to Review anyway would let auto-commit and auto-PR fire mid-work, which
+is what this change exists to prevent.
+
 ### `KANBAN_CLAUDE_SKIP_PERMISSIONS`
 
 This is off by default. With `KANBAN_CLAUDE_SKIP_PERMISSIONS=1` set in the environment that
