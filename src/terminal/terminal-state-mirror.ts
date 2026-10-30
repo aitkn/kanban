@@ -55,13 +55,17 @@ export class TerminalStateMirror {
 		});
 	}
 
+	// Serializes in queue order: the snapshot holds exactly the output applied before this call.
 	async getSnapshot(): Promise<TerminalRestoreSnapshot> {
-		await this.operationQueue;
-		return {
-			snapshot: this.serializeAddon.serialize(),
-			cols: this.terminal.cols,
-			rows: this.terminal.rows,
-		};
+		return await new Promise<TerminalRestoreSnapshot>((resolve) => {
+			this.enqueueOperation(() => {
+				resolve({
+					snapshot: this.serializeAddon.serialize(),
+					cols: this.terminal.cols,
+					rows: this.terminal.rows,
+				});
+			});
+		});
 	}
 
 	dispose(): void {

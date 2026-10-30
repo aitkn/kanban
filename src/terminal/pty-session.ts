@@ -7,7 +7,7 @@ import {
 } from "../core/windows-cmd-launch";
 
 export interface PtyExitEvent {
-	exitCode: number;
+	exitCode: number | null;
 	signal?: number;
 }
 

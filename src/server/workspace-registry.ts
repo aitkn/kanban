@@ -15,6 +15,7 @@ import {
 	removeWorkspaceIndexEntry,
 	removeWorkspaceStateFiles,
 } from "../state/workspace-state";
+import type { PtyBackend } from "../terminal/pty-backend";
 import { TerminalSessionManager } from "../terminal/session-manager";
 
 export interface WorkspaceRegistryScope {
@@ -29,6 +30,8 @@ export interface CreateWorkspaceRegistryDependencies {
 	hasGitRepository: (path: string) => boolean;
 	pathIsDirectory: (path: string) => Promise<boolean>;
 	onTerminalManagerReady?: (workspaceId: string, manager: TerminalSessionManager) => void;
+	// sked fork: where task and shell PTYs run. Defaults to inside this process.
+	ptyBackend?: PtyBackend;
 }
 
 export interface DisposeWorkspaceRegistryOptions {
@@ -234,13 +237,14 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			return loaded;
 		}
 		const loading = (async () => {
-			const manager = new TerminalSessionManager();
+			const manager = new TerminalSessionManager({ ptyBackend: deps.ptyBackend, namespace: workspaceId });
 			try {
 				const existingWorkspace = await loadWorkspaceState(repoPath);
 				manager.hydrateFromRecord(existingWorkspace.sessions);
 			} catch {
 				// Workspace state will be created on demand.
 			}
+			await manager.reattachDetachedSessions();
 			terminalManagersByWorkspaceId.set(workspaceId, manager);
 			return manager;
 		})().finally(() => {
@@ -436,6 +440,19 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 
 	if (initialWorkspace) {
 		await ensureTerminalManagerForWorkspace(initialWorkspace.workspaceId, initialWorkspace.repoPath);
+	}
+	// sked fork: load every project that still has PTYs running in the host, so their agents are
+	// tracked from startup rather than from the first time someone opens the project.
+	if (deps.ptyBackend) {
+		const detachedSessions = await deps.ptyBackend.listDetachedSessions(null).catch(() => []);
+		const detachedWorkspaceIds = new Set(detachedSessions.map((session) => session.namespace));
+		if (detachedWorkspaceIds.size > 0) {
+			for (const workspace of await listWorkspaceIndexEntries()) {
+				if (detachedWorkspaceIds.has(workspace.workspaceId)) {
+					await ensureTerminalManagerForWorkspace(workspace.workspaceId, workspace.repoPath);
+				}
+			}
+		}
 	}
 
 	return {

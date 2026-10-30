@@ -117,6 +117,39 @@ describe("TerminalSessionManager auto-restart", () => {
 		expect(manager.getSummary("task-1")?.pid).toBeNull();
 	});
 
+	it("does not restart an attached agent session stopped by shutdown", async () => {
+		const spawnedSessions: Array<ReturnType<typeof createMockPtySession>> = [];
+		ptySessionSpawnMock.mockImplementation((request: MockSpawnRequest) => {
+			const session = createMockPtySession(111, request);
+			spawnedSessions.push(session);
+			return session;
+		});
+
+		const manager = new TerminalSessionManager();
+		manager.attach("task-1", {
+			onState: vi.fn(),
+			onOutput: vi.fn(),
+			onExit: vi.fn(),
+		});
+
+		await manager.startTaskSession({
+			taskId: "task-1",
+			agentId: "codex",
+			binary: "codex",
+			args: [],
+			cwd: "/tmp/task-1",
+			prompt: "Fix the bug",
+		});
+
+		manager.markInterruptedAndStopAll();
+		spawnedSessions[0]?.triggerExit(143);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(ptySessionSpawnMock).toHaveBeenCalledTimes(1);
+		expect(manager.getSummary("task-1")?.pid).toBeNull();
+	});
+
 	it("sends deferred Codex startup input when the prompt marker appears", async () => {
 		const deferredStartupInput = "\u001b[200~/plan Validate rollout\u001b[201~\r";
 		prepareAgentLaunchMock.mockResolvedValue({

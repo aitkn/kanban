@@ -55,6 +55,12 @@ await Promise.all([
 		entryPoints: ["src/index.ts"],
 		outfile: "dist/index.js",
 	}),
+	// sked fork: detached PTY host the CLI starts so agents outlive a runtime restart
+	esbuild.build({
+		...shared,
+		entryPoints: ["src/terminal/pty-host/pty-host-main.ts"],
+		outfile: "dist/pty-host.js",
+	}),
 ]);
 
-console.log("esbuild: bundled dist/cli.js and dist/index.js");
+console.log("esbuild: bundled dist/cli.js, dist/index.js and dist/pty-host.js");
