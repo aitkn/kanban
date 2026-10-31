@@ -9,6 +9,7 @@ import type {
 	RuntimeTaskImage,
 	RuntimeTaskSessionSummary,
 } from "../core/api-contract";
+import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { buildKanbanCommandParts } from "../core/kanban-command";
 import { quoteShellArg } from "../core/shell";
 import { lockedFileSystem } from "../fs/locked-file-system";
@@ -606,12 +607,17 @@ function toBracketedPasteSubmission(command: string): string {
 // sked fork: on by default. Autonomous Claude cards run with --dangerously-skip-permissions, i.e. with no
 // permission checks at all, instead of upstream's --permission-mode auto: auto mode's classifier refuses tool
 // calls it cannot evaluate, which halts a long unattended card until a human steps in.
-// KANBAN_CLAUDE_SKIP_PERMISSIONS=0 (or false) restores --permission-mode auto.
+// KANBAN_CLAUDE_SKIP_PERMISSIONS=0 (or false, no, off, or empty) restores --permission-mode auto.
+// The sidebar Kanban agent always keeps auto mode: it is not a card and runs in the main checkout.
 const CLAUDE_SKIP_PERMISSIONS_ENV = "KANBAN_CLAUDE_SKIP_PERMISSIONS";
+const CLAUDE_SKIP_PERMISSIONS_OFF_VALUES = new Set(["", "0", "false", "no", "off"]);
 
-function isClaudeSkipPermissionsEnabled(): boolean {
-	const value = process.env[CLAUDE_SKIP_PERMISSIONS_ENV]?.trim().toLowerCase();
-	return value !== "0" && value !== "false";
+function isClaudeSkipPermissionsEnabled(taskId: string): boolean {
+	if (isHomeAgentSessionId(taskId)) {
+		return false;
+	}
+	const value = process.env[CLAUDE_SKIP_PERMISSIONS_ENV];
+	return value === undefined || !CLAUDE_SKIP_PERMISSIONS_OFF_VALUES.has(value.trim().toLowerCase());
 }
 
 const claudeAdapter: AgentSessionAdapter = {
@@ -631,7 +637,7 @@ const claudeAdapter: AgentSessionAdapter = {
 			!hasCliOption(args, "--permission-mode") &&
 			!hasCliOption(args, "--dangerously-skip-permissions")
 		) {
-			if (isClaudeSkipPermissionsEnabled()) {
+			if (isClaudeSkipPermissionsEnabled(input.taskId)) {
 				// sked fork: the CLAUDE_CODE_ENABLE_AUTO_MODE set above does not undo this. Claude Code 2.1.314 picks its
 				// startup mode from this flag ahead of settings' defaultMode and does not read that variable there.
 				args.push("--dangerously-skip-permissions");

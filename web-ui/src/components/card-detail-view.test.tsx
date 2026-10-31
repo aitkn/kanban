@@ -134,7 +134,7 @@ describe("CardDetailView", () => {
 		}
 	});
 
-	it("opens a card without loading its changes and gives the agent the full width", async () => {
+	it("opens a card without loading its changes or rendering a diff panel", async () => {
 		await act(async () => {
 			root.render(
 				<CardDetailView
@@ -198,7 +198,7 @@ describe("CardDetailView", () => {
 		expect(tabLabels).not.toContain("Files");
 	});
 
-	it("closes git history before handling other Escape behavior", async () => {
+	it("closes git history on Escape, even from a text input", async () => {
 		const onCloseGitHistory = vi.fn();
 
 		await act(async () => {

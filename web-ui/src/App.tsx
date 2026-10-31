@@ -1008,6 +1008,7 @@ export default function App(): ReactElement {
 						</div>
 						{selectedCard && detailSession ? (
 							<div className="absolute inset-0 flex min-h-0 min-w-0">
+								{/* sked fork: no review-comment or document-visibility props, the detail view has no diff panel. */}
 								<CardDetailView
 									selection={selectedCard}
 									currentProjectId={currentProjectId}

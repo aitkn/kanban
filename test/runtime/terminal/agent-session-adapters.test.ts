@@ -705,7 +705,23 @@ describe("prepareAgentLaunch hook strategies", () => {
 		expect(planLaunch.args[planLaunch.args.indexOf("--permission-mode") + 1]).toBe("plan");
 	});
 
-	it.each(["0", "false", " FALSE "])(
+	it("keeps the sidebar Kanban agent in --permission-mode auto", async () => {
+		setupTempHome();
+		const launch = await prepareAgentLaunch({
+			taskId: "__home_agent__:workspace-1:claude",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			autonomousModeEnabled: true,
+			cwd: "/tmp",
+			prompt: "",
+		});
+		expect(launch.args).not.toContain("--dangerously-skip-permissions");
+		expect(launch.args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
+		expect(launch.args[launch.args.indexOf("--permission-mode") + 1]).toBe("auto");
+	});
+
+	it.each(["0", "false", " FALSE ", "no", "off", ""])(
 		"runs autonomous claude with --permission-mode auto when KANBAN_CLAUDE_SKIP_PERMISSIONS=%j",
 		async (value) => {
 			setupTempHome();

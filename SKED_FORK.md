@@ -28,7 +28,7 @@ instead. To upgrade, install the newer release tarball.
 | Workspace git metadata poll (`src/server/workspace-metadata-monitor.ts`) | 1s | 10s |
 | Card detail "Changes" panel (`web-ui/src/components/card-detail-view.tsx`) | a diff column beside the agent, loaded with `workspace.getChanges` on open, on every metadata update and every 1s | removed: the agent takes the full width and opening a card loads no diff; the git history view (Ctrl+G) still shows diffs |
 | Self-update (`src/update/update.ts`) | from npm on startup | off for `-sked.N` versions |
-| Autonomous Claude cards (`src/terminal/agent-session-adapters.ts`) | `--permission-mode auto` | `--dangerously-skip-permissions`, unless `KANBAN_CLAUDE_SKIP_PERMISSIONS=0` |
+| Autonomous Claude cards (`src/terminal/agent-session-adapters.ts`) | `--permission-mode auto` | `--dangerously-skip-permissions`, unless `KANBAN_CLAUDE_SKIP_PERMISSIONS=0`; the sidebar Kanban agent keeps auto mode |
 | Board save conflict (`web-ui/src/runtime/use-workspace-persistence.ts`) | adopts the server revision, skips the reload, then saves the stale board over the server's | reloads the server board and drops the local edit, with the existing toast |
 | Move to Done (`web-ui/src/hooks/use-linked-backlog-task-actions.ts`, `web-ui/src/stores/board-persistence-confirmations.ts`) | stops the session and deletes the worktree before the move is saved | waits until the server has the move; if it is lost, touches nothing and warns |
 | Lost Start (`web-ui/src/hooks/use-board-interactions.ts`) | a Start dropped by a conflict leaves the agent running on a Backlog card | the card moves beside its session (only for a session started after the card was created) |
@@ -135,10 +135,11 @@ This is on by default: autonomous Claude cards run with `--dangerously-skip-perm
 no permission checks of any kind. Upstream runs them with `--permission-mode auto`, whose classifier
 refuses tool calls it cannot evaluate; on a long unattended card that halts the agent until someone
 switches modes by hand. Plan-mode starts are unaffected (they still start in `--permission-mode plan`),
-and so is a card whose agent arguments already set a permission mode.
+and so is a card whose agent arguments already set a permission mode. The sidebar Kanban agent is not a
+card and runs in the main checkout, so it always keeps `--permission-mode auto`.
 
-To get upstream's auto mode back, set `KANBAN_CLAUDE_SKIP_PERMISSIONS=0` (or `false`) in the
-environment that starts `kanban`:
+To get upstream's auto mode back for cards, set `KANBAN_CLAUDE_SKIP_PERMISSIONS` to `0`, `false`, `no`,
+`off` or an empty value in the environment that starts `kanban`:
 
 ```bash
 KANBAN_CLAUDE_SKIP_PERMISSIONS=0 kanban
