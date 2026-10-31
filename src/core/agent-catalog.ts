@@ -15,7 +15,8 @@ export const RUNTIME_AGENT_CATALOG: RuntimeAgentCatalogEntry[] = [
 		label: "Claude Code",
 		binary: "claude",
 		baseArgs: [],
-		autonomousArgs: ["--permission-mode", "auto"],
+		// sked fork: shown as the command in settings; the adapter adds it unless KANBAN_CLAUDE_SKIP_PERMISSIONS=0.
+		autonomousArgs: ["--dangerously-skip-permissions"],
 		installUrl: "https://docs.anthropic.com/en/docs/claude-code/quickstart",
 	},
 	{
