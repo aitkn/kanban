@@ -1296,8 +1296,8 @@ export function registerTaskCommand(program: Command): void {
 				"  Once only one linked task remains in backlog, Kanban reorients the saved link",
 				"  so the backlog task is the waiting dependent task and the other task is the",
 				"  prerequisite.",
-				"  When the prerequisite finishes review and moves to done, the waiting backlog",
-				"  task becomes ready to start.",
+				"  A backlog task can wait on several prerequisites. It becomes ready to start",
+				"  only when the last of them finishes review and moves to done.",
 				"",
 			].join("\n"),
 		)

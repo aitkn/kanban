@@ -502,4 +502,60 @@ describe("useLinkedBacklogTaskActions", () => {
 		expect(showAppToastMock).toHaveBeenCalledTimes(1);
 		expect(showAppToastMock.mock.calls[0]?.[0]).toMatchObject({ intent: "warning" });
 	});
+
+	it("starts a join card once when its prerequisites are trashed back to back before a re-render", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const kickoffTaskInProgress = vi.fn(async (_task: BoardCard, _taskId: string) => true);
+		const boardFactory = (): BoardData => {
+			const board = createBoard([
+				{ id: "dep-1", fromTaskId: "task-1", toTaskId: "task-2", createdAt: 10 },
+				{ id: "dep-2", fromTaskId: "task-1", toTaskId: "task-4", createdAt: 11 },
+			]);
+			return {
+				...board,
+				columns: board.columns.map((column) =>
+					column.id === "review"
+						? { ...column, cards: [...column.cards, createTask("task-4", "Second review task", 4)] }
+						: column,
+				),
+			};
+		};
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					boardFactory={boardFactory}
+					kickoffTaskInProgress={kickoffTaskInProgress}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		if (latestSnapshot === null) {
+			throw new Error("Expected a hook snapshot.");
+		}
+		const initialSnapshot = latestSnapshot as HookSnapshot;
+
+		await act(async () => {
+			// Both requests start in the same tick, so React has not re-rendered in between.
+			const firstMove = initialSnapshot.requestMoveTaskToTrash("task-2", "review");
+			const secondMove = initialSnapshot.requestMoveTaskToTrash("task-4", "review");
+			await Promise.all([firstMove, secondMove]);
+		});
+
+		expect(kickoffTaskInProgress).toHaveBeenCalledTimes(1);
+		expect(kickoffTaskInProgress.mock.calls[0]?.[1]).toBe("task-1");
+		if (latestSnapshot === null) {
+			throw new Error("Expected an updated hook snapshot.");
+		}
+		const finalBoard = (latestSnapshot as HookSnapshot).board;
+		expect(
+			finalBoard.columns
+				.find((column) => column.id === "trash")
+				?.cards.map((card) => card.id)
+				.sort(),
+		).toEqual(["task-2", "task-4"]);
+	});
 });

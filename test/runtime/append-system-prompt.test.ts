@@ -55,6 +55,13 @@ describe("resolveAppendSystemPromptCommandPrefix", () => {
 });
 
 describe("renderAppendSystemPrompt", () => {
+	it("describes linked tasks as waiting for all of their prerequisites", () => {
+		const rendered = renderAppendSystemPrompt("kanban");
+		expect(rendered).toContain("waits until all of them are done");
+		expect(rendered).not.toContain("any linked backlog tasks automatically start");
+		expect(rendered).not.toContain("when the linked review task is moved to done, that backlog task becomes ready");
+	});
+
 	it("renders Kanban sidebar guidance and command reference", () => {
 		const rendered = renderAppendSystemPrompt("kanban");
 		expect(rendered).toContain("Kanban sidebar agent");

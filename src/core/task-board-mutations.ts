@@ -205,7 +205,9 @@ function resolveDependencyEndpoints(
 		: { backlogTaskId: secondTaskId, linkedTaskId: firstTaskId };
 }
 
-function getLinkedBacklogTaskIdsReadyAfterTaskTrashed(
+// Backlog cards waiting on `taskId` whose wait is satisfied by `taskId` finishing.
+// Only a review -> done move counts as finishing; other moves into trash just drop the link.
+function getBacklogTaskIdsUnblockedByTaskTrashed(
 	board: RuntimeBoardData,
 	taskId: string,
 	fromColumnId: RuntimeBoardColumnId | null,
@@ -213,7 +215,7 @@ function getLinkedBacklogTaskIdsReadyAfterTaskTrashed(
 	if (!taskId || board.dependencies.length === 0 || fromColumnId !== "review") {
 		return [];
 	}
-	const readyTaskIds = new Set<string>();
+	const unblockedTaskIds = new Set<string>();
 	for (const dependency of board.dependencies) {
 		if (dependency.toTaskId !== taskId) {
 			continue;
@@ -221,9 +223,18 @@ function getLinkedBacklogTaskIdsReadyAfterTaskTrashed(
 		if (getTaskColumnId(board, dependency.fromTaskId) !== "backlog") {
 			continue;
 		}
-		readyTaskIds.add(dependency.fromTaskId);
+		unblockedTaskIds.add(dependency.fromTaskId);
 	}
-	return [...readyTaskIds];
+	return [...unblockedTaskIds];
+}
+
+/**
+ * sked fork: number of unfinished prerequisites a backlog card still waits on.
+ * Links are pruned as soon as a prerequisite reaches done, so every link that
+ * remains with this card on the waiting side is a prerequisite still pending.
+ */
+export function countPendingPrerequisites(board: RuntimeBoardData, taskId: string): number {
+	return board.dependencies.filter((dependency) => dependency.fromTaskId === taskId).length;
 }
 
 export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardData {
@@ -411,20 +422,33 @@ export function removeTaskDependency(board: RuntimeBoardData, dependencyId: stri
 }
 
 export function getReadyLinkedTaskIdsForTaskInTrash(board: RuntimeBoardData, taskId: string): string[] {
-	return getLinkedBacklogTaskIdsReadyAfterTaskTrashed(board, taskId, getTaskColumnId(board, taskId));
+	return trashTaskAndGetReadyLinkedTaskIds(board, taskId).readyTaskIds;
 }
 
+/**
+ * sked fork: linked cards join (ALL prerequisites) instead of starting after the first (ANY).
+ * Moves `taskId` to trash and returns the backlog cards that should auto-start.
+ * A waiting card starts only when this move finished its LAST pending prerequisite
+ * (join semantics): it must have been unblocked by this review -> done move and have
+ * no links left once the move has pruned the finished prerequisite.
+ */
 export function trashTaskAndGetReadyLinkedTaskIds(
 	board: RuntimeBoardData,
 	taskId: string,
 	now: number = Date.now(),
 ): RuntimeTrashTaskResult {
 	const fromColumnId = getTaskColumnId(board, taskId);
-	const readyTaskIds = getLinkedBacklogTaskIdsReadyAfterTaskTrashed(board, taskId, fromColumnId);
+	const unblockedTaskIds = getBacklogTaskIdsUnblockedByTaskTrashed(board, taskId, fromColumnId);
 	const movedToTrash = moveTaskToColumn(board, taskId, "trash", now);
+	if (!movedToTrash.moved) {
+		return { ...movedToTrash, readyTaskIds: [] };
+	}
+	const readyTaskIds = unblockedTaskIds.filter(
+		(unblockedTaskId) => countPendingPrerequisites(movedToTrash.board, unblockedTaskId) === 0,
+	);
 	return {
 		...movedToTrash,
-		readyTaskIds: movedToTrash.moved ? readyTaskIds : [],
+		readyTaskIds,
 	};
 }
 

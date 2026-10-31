@@ -37,6 +37,7 @@ export function BoardColumn({
 	dependencySourceTaskId,
 	dependencyTargetTaskId,
 	isDependencyLinking,
+	pendingPrerequisiteCountByTaskId,
 	workspacePath,
 	defaultClineModelId,
 }: {
@@ -67,6 +68,7 @@ export function BoardColumn({
 	dependencySourceTaskId?: string | null;
 	dependencyTargetTaskId?: string | null;
 	isDependencyLinking?: boolean;
+	pendingPrerequisiteCountByTaskId?: Record<string, number>;
 	workspacePath?: string | null;
 	defaultClineModelId?: string | null;
 }): React.ReactElement {
@@ -186,6 +188,7 @@ export function BoardColumn({
 											isDependencySource={dependencySourceTaskId === card.id}
 											isDependencyTarget={dependencyTargetTaskId === card.id}
 											isDependencyLinking={isDependencyLinking}
+											pendingPrerequisiteCount={pendingPrerequisiteCountByTaskId?.[card.id] ?? 0}
 											workspacePath={workspacePath}
 											defaultClineModelId={defaultClineModelId}
 											onSaveTitle={onSaveTitle}
