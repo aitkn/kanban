@@ -2,13 +2,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { prepareAgentLaunch } from "../../../src/terminal/agent-session-adapters";
 
 const originalHome = process.env.HOME;
 const originalAppData = process.env.APPDATA;
 const originalLocalAppData = process.env.LOCALAPPDATA;
+const originalClaudeSkipPermissions = process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS;
 let tempHome: string | null = null;
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
@@ -52,7 +53,17 @@ function getCodexConfigOverrideValues(args: string[], key: string): string[] {
 	return values;
 }
 
+// The Claude permission default must not depend on the shell that runs the tests.
+beforeEach(() => {
+	delete process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS;
+});
+
 afterEach(() => {
+	if (originalClaudeSkipPermissions === undefined) {
+		delete process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS;
+	} else {
+		process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS = originalClaudeSkipPermissions;
+	}
 	if (originalHome === undefined) {
 		delete process.env.HOME;
 	} else {
@@ -665,13 +676,58 @@ describe("prepareAgentLaunch hook strategies", () => {
 		}
 	});
 
-	it("uses --dangerously-skip-permissions for autonomous claude only when KANBAN_CLAUDE_SKIP_PERMISSIONS is set", async () => {
+	it("runs autonomous claude with --dangerously-skip-permissions by default", async () => {
 		setupTempHome();
-		const previous = process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS;
-		try {
-			process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS = "1";
+		const launch = await prepareAgentLaunch({
+			taskId: "task-claude-skip",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			autonomousModeEnabled: true,
+			cwd: "/tmp",
+			prompt: "",
+		});
+		expect(launch.args.filter((arg) => arg === "--dangerously-skip-permissions")).toHaveLength(1);
+		expect(launch.args).not.toContain("--permission-mode");
+
+		const planLaunch = await prepareAgentLaunch({
+			taskId: "task-claude-skip-plan",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			autonomousModeEnabled: true,
+			startInPlanMode: true,
+			cwd: "/tmp",
+			prompt: "",
+		});
+		expect(planLaunch.args).not.toContain("--dangerously-skip-permissions");
+		expect(planLaunch.args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
+		expect(planLaunch.args[planLaunch.args.indexOf("--permission-mode") + 1]).toBe("plan");
+	});
+
+	it("keeps the sidebar Kanban agent in --permission-mode auto", async () => {
+		setupTempHome();
+		const launch = await prepareAgentLaunch({
+			taskId: "__home_agent__:workspace-1:claude",
+			agentId: "claude",
+			binary: "claude",
+			args: [],
+			autonomousModeEnabled: true,
+			cwd: "/tmp",
+			prompt: "",
+		});
+		expect(launch.args).not.toContain("--dangerously-skip-permissions");
+		expect(launch.args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
+		expect(launch.args[launch.args.indexOf("--permission-mode") + 1]).toBe("auto");
+	});
+
+	it.each(["0", "false", " FALSE ", "no", "off", ""])(
+		"runs autonomous claude with --permission-mode auto when KANBAN_CLAUDE_SKIP_PERMISSIONS=%j",
+		async (value) => {
+			setupTempHome();
+			process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS = value;
 			const launch = await prepareAgentLaunch({
-				taskId: "task-claude-skip",
+				taskId: "task-claude-opt-out",
 				agentId: "claude",
 				binary: "claude",
 				args: [],
@@ -679,11 +735,12 @@ describe("prepareAgentLaunch hook strategies", () => {
 				cwd: "/tmp",
 				prompt: "",
 			});
-			expect(launch.args).toContain("--dangerously-skip-permissions");
-			expect(launch.args).not.toContain("--permission-mode");
+			expect(launch.args).not.toContain("--dangerously-skip-permissions");
+			expect(launch.args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
+			expect(launch.args[launch.args.indexOf("--permission-mode") + 1]).toBe("auto");
 
 			const planLaunch = await prepareAgentLaunch({
-				taskId: "task-claude-skip-plan",
+				taskId: "task-claude-opt-out-plan",
 				agentId: "claude",
 				binary: "claude",
 				args: [],
@@ -692,16 +749,10 @@ describe("prepareAgentLaunch hook strategies", () => {
 				cwd: "/tmp",
 				prompt: "",
 			});
-			expect(planLaunch.args).not.toContain("--dangerously-skip-permissions");
+			expect(planLaunch.args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
 			expect(planLaunch.args[planLaunch.args.indexOf("--permission-mode") + 1]).toBe("plan");
-		} finally {
-			if (previous === undefined) {
-				delete process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS;
-			} else {
-				process.env.KANBAN_CLAUDE_SKIP_PERMISSIONS = previous;
-			}
-		}
-	});
+		},
+	);
 
 	it("applies autonomous mode flags in adapters for non-droid CLIs", async () => {
 		setupTempHome();
@@ -715,10 +766,8 @@ describe("prepareAgentLaunch hook strategies", () => {
 			cwd: "/tmp",
 			prompt: "",
 		});
-		const permissionModeIndex = claudeLaunch.args.indexOf("--permission-mode");
-		expect(permissionModeIndex).toBeGreaterThan(-1);
-		expect(claudeLaunch.args[permissionModeIndex + 1]).toBe("auto");
-		expect(claudeLaunch.args).not.toContain("--dangerously-skip-permissions");
+		expect(claudeLaunch.args).toContain("--dangerously-skip-permissions");
+		expect(claudeLaunch.args).not.toContain("--permission-mode");
 		expect(claudeLaunch.env.CLAUDE_CODE_ENABLE_AUTO_MODE).toBe("1");
 
 		const codexLaunch = await prepareAgentLaunch({
@@ -779,6 +828,7 @@ describe("prepareAgentLaunch hook strategies", () => {
 		});
 		expect(launch.args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
 		expect(launch.args).not.toContain("auto");
+		expect(launch.args).not.toContain("--dangerously-skip-permissions");
 	});
 
 	it("starts Claude plan mode without bypass flags and keeps auto mode reachable", async () => {
@@ -796,6 +846,7 @@ describe("prepareAgentLaunch hook strategies", () => {
 		const permissionModeIndex = launch.args.indexOf("--permission-mode");
 		expect(permissionModeIndex).toBeGreaterThan(-1);
 		expect(launch.args[permissionModeIndex + 1]).toBe("plan");
+		expect(launch.args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
 		expect(launch.args).not.toContain("--dangerously-skip-permissions");
 		expect(launch.args).not.toContain("--allow-dangerously-skip-permissions");
 		expect(launch.env.CLAUDE_CODE_ENABLE_AUTO_MODE).toBe("1");

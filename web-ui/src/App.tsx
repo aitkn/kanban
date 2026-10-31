@@ -575,8 +575,6 @@ export default function App(): ReactElement {
 		handleCancelAutomaticTaskAction,
 		handleOpenClearTrash,
 		handleConfirmClearTrash,
-		handleAddReviewComments,
-		handleSendReviewComments,
 		moveToTrashLoadingById,
 		trashTaskCount,
 	} = useBoardInteractions({
@@ -1010,6 +1008,7 @@ export default function App(): ReactElement {
 						</div>
 						{selectedCard && detailSession ? (
 							<div className="absolute inset-0 flex min-h-0 min-w-0">
+								{/* sked fork: no review-comment or document-visibility props, the detail view has no diff panel. */}
 								<CardDetailView
 									selection={selectedCard}
 									currentProjectId={currentProjectId}
@@ -1043,12 +1042,6 @@ export default function App(): ReactElement {
 									onMoveReviewCardToTrash={handleMoveReviewCardToTrash}
 									onRestoreTaskFromTrash={handleRestoreTaskFromTrash}
 									onCancelAutomaticTaskAction={handleCancelAutomaticTaskAction}
-									onAddReviewComments={(taskId: string, text: string) => {
-										void handleAddReviewComments(taskId, text);
-									}}
-									onSendReviewComments={(taskId: string, text: string) => {
-										void handleSendReviewComments(taskId, text);
-									}}
 									onSendClineChatMessage={sendTaskChatMessage}
 									onCancelClineChatTurn={cancelTaskChatTurn}
 									onLoadClineChatMessages={fetchTaskChatMessages}
@@ -1075,7 +1068,6 @@ export default function App(): ReactElement {
 									onBottomTerminalSendAgentCommand={handleSendAgentCommandToDetailTerminal}
 									isBottomTerminalExpanded={isDetailTerminalExpanded}
 									onBottomTerminalToggleExpand={handleToggleExpandDetailTerminal}
-									isDocumentVisible={isDocumentVisible}
 									onClineSettingsSaved={refreshRuntimeProjectConfig}
 									onTaskClineSettingsChanged={handleClineTaskSettingsChangedForTask}
 								/>
