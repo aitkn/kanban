@@ -9,13 +9,13 @@ import {
 	type SnapDragActions,
 } from "@hello-pangea/dnd";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BoardColumn } from "@/components/board-column";
 import { DependencyOverlay } from "@/components/dependencies/dependency-overlay";
 import { useDependencyLinking } from "@/components/dependencies/use-dependency-linking";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
-import { canCreateTaskDependency } from "@/state/board-state";
+import { canCreateTaskDependency, getPendingPrerequisiteCountByTaskId } from "@/state/board-state";
 import { findCardColumnId, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
 import type { BoardCard, BoardColumnId, BoardData, BoardDependency } from "@/types";
 
@@ -100,6 +100,8 @@ export function KanbanBoard({
 	useEffect(() => {
 		latestDataRef.current = data;
 	}, [data]);
+
+	const pendingPrerequisiteCountByTaskId = useMemo(() => getPendingPrerequisiteCountByTaskId(data), [data]);
 
 	const programmaticSensor: Sensor = useCallback((api: SensorAPI) => {
 		sensorApiRef.current = api;
@@ -409,6 +411,9 @@ export function KanbanBoard({
 						dependencySourceTaskId={dependencyLinking.draft?.sourceTaskId ?? null}
 						dependencyTargetTaskId={dependencyLinking.draft?.targetTaskId ?? null}
 						isDependencyLinking={dependencyLinking.draft !== null}
+						pendingPrerequisiteCountByTaskId={
+							column.id === "backlog" ? pendingPrerequisiteCountByTaskId : undefined
+						}
 						workspacePath={workspacePath}
 						defaultClineModelId={defaultClineModelId}
 						onCardClick={(card) => {

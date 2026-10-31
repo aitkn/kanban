@@ -131,6 +131,9 @@ export function useLinkedBacklogTaskActions({
 				await cleanupTaskWorkspace(task.id);
 				return;
 			}
+			// sked fork: linked cards start only after their last prerequisite is done, so a trash request
+			// issued before React re-renders must already see this one, or the card never starts.
+			boardRef.current = trashed.board;
 
 			setBoard((currentBoardState) => {
 				const latestTrashResult = trashTaskAndGetReadyLinkedTaskIds(currentBoardState, task.id);

@@ -2,7 +2,18 @@ import { Draggable } from "@hello-pangea/dnd";
 import { getRuntimeAgentCatalogEntry } from "@runtime-agent-catalog";
 import { formatClineToolCallLabel } from "@runtime-cline-tool-call-display";
 import { buildTaskWorktreeDisplayPath } from "@runtime-task-worktree-path";
-import { AlertCircle, AlertTriangle, Bot, GitBranch, Pencil, Play, RotateCcw, ShieldAlert, Trash2 } from "lucide-react";
+import {
+	AlertCircle,
+	AlertTriangle,
+	Bot,
+	GitBranch,
+	Link2,
+	Pencil,
+	Play,
+	RotateCcw,
+	ShieldAlert,
+	Trash2,
+} from "lucide-react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -245,6 +256,7 @@ export function BoardCard({
 	isDependencyLinking = false,
 	workspacePath,
 	defaultClineModelId = null,
+	pendingPrerequisiteCount = 0,
 }: {
 	card: BoardCardModel;
 	index: number;
@@ -269,6 +281,7 @@ export function BoardCard({
 	isDependencyLinking?: boolean;
 	workspacePath?: string | null;
 	defaultClineModelId?: string | null;
+	pendingPrerequisiteCount?: number;
 }): React.ReactElement {
 	const [isHovered, setIsHovered] = useState(false);
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -621,6 +634,22 @@ export function BoardCard({
 										</p>
 									)}
 								</div>
+								{/* sked fork: how many linked tasks a joined backlog card still waits on. */}
+								{columnId === "backlog" && pendingPrerequisiteCount > 1 ? (
+									<Tooltip
+										side="bottom"
+										content={`Waiting on ${pendingPrerequisiteCount} linked tasks. Starts automatically once all of them are done.`}
+									>
+										<span
+											role="img"
+											aria-label={`Waiting on ${pendingPrerequisiteCount} linked tasks`}
+											className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-surface-3 px-1.5 py-0.5 text-xs text-text-secondary"
+										>
+											<Link2 size={12} aria-hidden />
+											{pendingPrerequisiteCount}
+										</span>
+									</Tooltip>
+								) : null}
 								{columnId === "backlog" ? (
 									<Button
 										icon={<Play size={14} />}

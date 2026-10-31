@@ -9,6 +9,7 @@ import {
 	applyTaskDetailClineSettingsSelection,
 	clearColumnTasks,
 	disableTaskAutoReview,
+	getPendingPrerequisiteCountByTaskId,
 	getTaskColumnId,
 	moveTaskToColumn,
 	normalizeBoardData,
@@ -154,14 +155,30 @@ describe("board dependency state", () => {
 		const dependencyB = addTaskDependency(dependencyA.board, taskC, taskB);
 		expect(dependencyB.added).toBe(true);
 
+		// C waits on both A and B, so it only unlocks once the last of them is done.
 		const moveATrash = trashTaskAndGetReadyLinkedTaskIds(dependencyB.board, taskA);
 		expect(moveATrash.moved).toBe(true);
 		expect(moveATrash.board.dependencies).toHaveLength(1);
-		expect(moveATrash.readyTaskIds).toEqual([taskC]);
+		expect(moveATrash.readyTaskIds).toEqual([]);
 
-		const moveBTrash = trashTaskAndGetReadyLinkedTaskIds(dependencyB.board, taskB);
+		const moveBTrash = trashTaskAndGetReadyLinkedTaskIds(moveATrash.board, taskB);
 		expect(moveBTrash.moved).toBe(true);
 		expect(moveBTrash.readyTaskIds).toEqual([taskC]);
+	});
+
+	it("counts pending prerequisites for each backlog card", () => {
+		const fixture = createBacklogBoard(["Task A", "Task B", "Task C", "Task D"]);
+		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
+		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
+		const taskC = requireTaskId(fixture.taskIdByPrompt["Task C"], "Task C");
+		const taskD = requireTaskId(fixture.taskIdByPrompt["Task D"], "Task D");
+		const movedA = moveTaskToColumn(fixture.board, taskA, "review");
+		const movedB = moveTaskToColumn(movedA.board, taskB, "in_progress");
+		const linkA = addTaskDependency(movedB.board, taskC, taskA);
+		const linkB = addTaskDependency(linkA.board, taskC, taskB);
+		const linkD = addTaskDependency(linkB.board, taskC, taskD);
+
+		expect(getPendingPrerequisiteCountByTaskId(linkD.board)).toEqual({ [taskC]: 3, [taskD]: 0 });
 	});
 
 	it("does not unlock backlog cards when an in-progress card is trashed", () => {

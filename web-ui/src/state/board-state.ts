@@ -386,6 +386,15 @@ export function trashTaskAndGetReadyLinkedTaskIds(
 	return runtimeTaskState.trashTaskAndGetReadyLinkedTaskIds(board, taskId);
 }
 
+/** Pending prerequisite count for every backlog card, keyed by task id. */
+export function getPendingPrerequisiteCountByTaskId(board: BoardData): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const card of board.columns.find((column) => column.id === "backlog")?.cards ?? []) {
+		counts[card.id] = runtimeTaskState.countPendingPrerequisites(board, card.id);
+	}
+	return counts;
+}
+
 export function applyDragResult(
 	board: BoardData,
 	result: DropResult,

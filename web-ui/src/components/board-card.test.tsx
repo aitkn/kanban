@@ -252,6 +252,37 @@ describe("BoardCard", () => {
 		expect(gitActionLabels()).toEqual([]);
 	});
 
+	it("shows how many prerequisites a backlog card is still waiting on when there are several", async () => {
+		await act(async () => {
+			root.render(
+				<TooltipProvider>
+					<BoardCard card={createCard()} index={0} columnId="backlog" pendingPrerequisiteCount={2} />
+				</TooltipProvider>,
+			);
+		});
+
+		const indicator = container.querySelector('[aria-label="Waiting on 2 linked tasks"]');
+		expect(indicator?.textContent).toBe("2");
+	});
+
+	it("hides the prerequisite indicator for a single prerequisite or outside backlog", async () => {
+		await act(async () => {
+			root.render(
+				<TooltipProvider>
+					<BoardCard card={createCard()} index={0} columnId="backlog" pendingPrerequisiteCount={1} />
+					<BoardCard
+						card={createCard({ id: "task-2" })}
+						index={1}
+						columnId="review"
+						pendingPrerequisiteCount={3}
+					/>
+				</TooltipProvider>,
+			);
+		});
+
+		expect(container.querySelector('[aria-label^="Waiting on"]')).toBeNull();
+	});
+
 	it("shows inline see more and less controls for long descriptions", async () => {
 		const description =
 			"Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau final hidden segment";
