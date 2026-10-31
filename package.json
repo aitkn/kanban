@@ -1,6 +1,6 @@
 {
   "name": "kanban",
-  "version": "0.1.70-sked.5",
+  "version": "0.1.70-sked.6",
   "description": "A kanban foundation for coding agents",
   "publishConfig": {
     "access": "public",
