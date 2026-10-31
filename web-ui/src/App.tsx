@@ -575,8 +575,6 @@ export default function App(): ReactElement {
 		handleCancelAutomaticTaskAction,
 		handleOpenClearTrash,
 		handleConfirmClearTrash,
-		handleAddReviewComments,
-		handleSendReviewComments,
 		moveToTrashLoadingById,
 		trashTaskCount,
 	} = useBoardInteractions({
@@ -1043,12 +1041,6 @@ export default function App(): ReactElement {
 									onMoveReviewCardToTrash={handleMoveReviewCardToTrash}
 									onRestoreTaskFromTrash={handleRestoreTaskFromTrash}
 									onCancelAutomaticTaskAction={handleCancelAutomaticTaskAction}
-									onAddReviewComments={(taskId: string, text: string) => {
-										void handleAddReviewComments(taskId, text);
-									}}
-									onSendReviewComments={(taskId: string, text: string) => {
-										void handleSendReviewComments(taskId, text);
-									}}
 									onSendClineChatMessage={sendTaskChatMessage}
 									onCancelClineChatTurn={cancelTaskChatTurn}
 									onLoadClineChatMessages={fetchTaskChatMessages}
@@ -1075,7 +1067,6 @@ export default function App(): ReactElement {
 									onBottomTerminalSendAgentCommand={handleSendAgentCommandToDetailTerminal}
 									isBottomTerminalExpanded={isDetailTerminalExpanded}
 									onBottomTerminalToggleExpand={handleToggleExpandDetailTerminal}
-									isDocumentVisible={isDocumentVisible}
 									onClineSettingsSaved={refreshRuntimeProjectConfig}
 									onTaskClineSettingsChanged={handleClineTaskSettingsChangedForTask}
 								/>

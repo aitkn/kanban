@@ -26,7 +26,7 @@ instead. To upgrade, install the newer release tarball.
 |---|---|---|
 | File lock stale timeout (`src/fs/locked-file-system.ts`) | 10s | 30s |
 | Workspace git metadata poll (`src/server/workspace-metadata-monitor.ts`) | 1s | 10s |
-| Card detail view diff poll (`web-ui/src/components/card-detail-view.tsx`) | every 1s | off |
+| Card detail "Changes" panel (`web-ui/src/components/card-detail-view.tsx`) | a diff column beside the agent, loaded with `workspace.getChanges` on open, on every metadata update and every 1s | removed: the agent takes the full width and opening a card loads no diff; the git history view (Ctrl+G) still shows diffs |
 | Self-update (`src/update/update.ts`) | from npm on startup | off for `-sked.N` versions |
 | Autonomous Claude cards (`src/terminal/agent-session-adapters.ts`) | `--permission-mode auto` | same, unless `KANBAN_CLAUDE_SKIP_PERMISSIONS=1` |
 | Board save conflict (`web-ui/src/runtime/use-workspace-persistence.ts`) | adopts the server revision, skips the reload, then saves the stale board over the server's | reloads the server board and drops the local edit, with the existing toast |
