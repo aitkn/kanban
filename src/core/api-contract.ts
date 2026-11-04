@@ -361,11 +361,26 @@ export const runtimeProjectTaskCountsSchema = z.object({
 });
 export type RuntimeProjectTaskCounts = z.infer<typeof runtimeProjectTaskCountsSchema>;
 
+/**
+ * sked fork: a task on this project's board that a card on another project's board depends on,
+ * with the column it shows right now (after live session state), for cross-project chips.
+ */
+export const runtimeProjectReferencedTaskSchema = z.object({
+	taskId: z.string(),
+	title: z.string(),
+	columnId: runtimeBoardColumnIdSchema,
+});
+export type RuntimeProjectReferencedTask = z.infer<typeof runtimeProjectReferencedTaskSchema>;
+
 export const runtimeProjectSummarySchema = z.object({
 	id: z.string(),
 	path: z.string(),
 	name: z.string(),
 	taskCounts: runtimeProjectTaskCountsSchema,
+	// sked fork: the display short name (`resolveProjectShortNames`) and the tasks other boards
+	// reference. Both are set on every project in the runtime state stream.
+	shortName: z.string().optional(),
+	referencedTasks: z.array(runtimeProjectReferencedTaskSchema).optional(),
 });
 export type RuntimeProjectSummary = z.infer<typeof runtimeProjectSummarySchema>;
 

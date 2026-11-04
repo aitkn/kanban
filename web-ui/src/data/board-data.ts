@@ -7,6 +7,11 @@ const columnOrder: Array<{ id: BoardColumnId; title: string }> = [
 	{ id: "trash", title: "Done" },
 ];
 
+/** sked fork: a column's title on any board, for a card on a board this tab does not hold. */
+export function getBoardColumnTitle(columnId: BoardColumnId): string {
+	return columnOrder.find((column) => column.id === columnId)?.title ?? columnId;
+}
+
 function createEmptyColumn(id: BoardColumnId, title: string): BoardColumn {
 	return {
 		id,
