@@ -10,6 +10,7 @@ import {
 	recordLinkedPrerequisites,
 	recordTaskPrerequisite,
 	removeTaskDependency,
+	removeTaskPrerequisite,
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
 } from "../../src/core/task-board-mutations";
@@ -797,5 +798,113 @@ describe("dependsOn (sked fork: persistent prerequisite record)", () => {
 
 		expect(dependsOnOf(parsed, "waiting")).toEqual([{ taskId: "prereq" }]);
 		expect(parsed.columns.find((column) => column.id === "review")?.cards[0]?.dependsOn).toBeUndefined();
+	});
+
+	describe("unlink by task IDs (removeTaskPrerequisite)", () => {
+		function removed(result: ReturnType<typeof removeTaskPrerequisite>): RuntimeBoardData {
+			if (!result.removed) {
+				throw new Error(`Expected the prerequisite to be removed, got ${result.reason}.`);
+			}
+			return result.board;
+		}
+
+		it("removes the live link and the dependsOn entry", () => {
+			let board = boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "review"],
+				["other", "review"],
+			]);
+			board = link(board, "waiting", "prereq");
+			board = link(board, "waiting", "other");
+
+			const unlinked = removed(removeTaskPrerequisite(board, "waiting", "prereq"));
+
+			expect(dependsOnOf(unlinked, "waiting")).toEqual([{ taskId: "other" }]);
+			expect(unlinked.dependencies).toEqual([expect.objectContaining({ fromTaskId: "waiting", toTaskId: "other" })]);
+		});
+
+		it("removes an entry whose live link is already gone", () => {
+			let board = link(
+				boardWithTasks([
+					["waiting", "backlog"],
+					["prereq", "review"],
+				]),
+				"waiting",
+				"prereq",
+			);
+			board = trashTaskAndGetReadyLinkedTaskIds(board, "prereq").board;
+			expect(board.dependencies).toEqual([]);
+			expect(dependsOnOf(board, "waiting")).toEqual([{ taskId: "prereq" }]);
+
+			const unlinked = removed(removeTaskPrerequisite(board, "waiting", "prereq"));
+
+			expect(dependsOnOf(unlinked, "waiting")).toEqual([]);
+		});
+
+		it("removes a link flipped by the waiting card starting", () => {
+			let board = link(
+				boardWithTasks([
+					["waiting", "backlog"],
+					["prereq", "backlog"],
+				]),
+				"waiting",
+				"prereq",
+			);
+			board = moveTaskToColumn(board, "waiting", "in_progress").board;
+			expect(board.dependencies).toEqual([expect.objectContaining({ fromTaskId: "prereq", toTaskId: "waiting" })]);
+
+			const unlinked = removed(removeTaskPrerequisite(board, "waiting", "prereq"));
+
+			expect(unlinked.dependencies).toEqual([]);
+			expect(dependsOnOf(unlinked, "waiting")).toEqual([]);
+		});
+
+		it("removes a flipped link named the way task list shows it, with the other card's entry", () => {
+			let board = link(
+				boardWithTasks([
+					["waiting", "backlog"],
+					["prereq", "backlog"],
+				]),
+				"waiting",
+				"prereq",
+			);
+			board = moveTaskToColumn(board, "waiting", "in_progress").board;
+			// task list now shows prereq waiting on waiting.
+
+			const unlinked = removed(removeTaskPrerequisite(board, "prereq", "waiting"));
+
+			expect(unlinked.dependencies).toEqual([]);
+			expect(dependsOnOf(unlinked, "waiting")).toEqual([]);
+			expect(dependsOnOf(unlinked, "prereq")).toEqual([]);
+		});
+
+		it("keeps a link in which the other card waits on this one", () => {
+			const board = link(
+				boardWithTasks([
+					["first", "backlog"],
+					["second", "backlog"],
+				]),
+				"second",
+				"first",
+			);
+
+			expect(removeTaskPrerequisite(board, "first", "second")).toEqual({ removed: false, reason: "not_linked" });
+			expect(board.dependencies).toHaveLength(1);
+			expect(removeTaskPrerequisite(board, "missing", "second")).toEqual({
+				removed: false,
+				reason: "missing_task",
+			});
+		});
+
+		it("leaves a cross-project ref with the same task ID alone", () => {
+			const board = boardWithTasks([["waiting", "backlog"]]);
+			const card = board.columns[0]?.cards[0];
+			if (!card) {
+				throw new Error("Expected the card.");
+			}
+			card.dependsOn = [{ taskId: "c64f9", projectId: "skedai-db" }];
+
+			expect(removeTaskPrerequisite(board, "waiting", "c64f9")).toEqual({ removed: false, reason: "not_linked" });
+		});
 	});
 });

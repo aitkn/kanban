@@ -62,6 +62,20 @@ describe("renderAppendSystemPrompt", () => {
 		expect(rendered).not.toContain("when the linked review task is moved to done, that backlog task becomes ready");
 	});
 
+	// sked fork
+	it("tells the sidebar agent how to link, unlink and display tasks on another project's board", () => {
+		const rendered = renderAppendSystemPrompt("kanban");
+		expect(rendered).toContain(
+			"kanban task link --task-id <task_id> --linked-task-id <other_task_id> (--linked-project-path <other_project_path> | --linked-project-id <other_project_id>)",
+		);
+		expect(rendered).toContain(
+			"kanban task unlink --task-id <task_id> --linked-task-id <other_task_id> (--linked-project-path <other_project_path> | --linked-project-id <other_project_id>)",
+		);
+		expect(rendered).toContain("never auto-starts anything");
+		expect(rendered).toContain("kanban project short-name (--set <name> | --clear)");
+		expect(rendered).toContain("`db#c64f9`");
+	});
+
 	it("renders Kanban sidebar guidance and command reference", () => {
 		const rendered = renderAppendSystemPrompt("kanban");
 		expect(rendered).toContain("Kanban sidebar agent");

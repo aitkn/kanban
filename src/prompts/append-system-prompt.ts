@@ -188,6 +188,7 @@ Parameters:
 - \`--project-path <path>\` optional workspace path. If omitted, uses the current working directory workspace.
 - \`--column <value>\` optional filter. Allowed values: \`backlog\`, \`in_progress\`, \`review\`, \`done\` (\`trash\` is also accepted).
 - Each task's \`dependsOn\` lists every task it was linked to as a prerequisite, kept after that task finishes or this one starts; only \`task unlink\` removes an entry. \`dependencies\` holds only the links still waiting to auto-start a task.
+- A \`dependsOn\` entry with a \`projectId\` is a task on another project's board (a cross-project link). Its \`ref\` is how it is displayed: \`<project short name>#<task id>\`, e.g. \`db#c64f9\`; a same-board entry's \`ref\` is just the task ID.
 
 ## task create
 
@@ -275,16 +276,59 @@ Notes:
 - Once only one linked task remains in backlog, Kanban reorients the saved dependency so the backlog task is the waiting dependent task and the other task is the prerequisite.
 - A backlog task can wait on several prerequisites. It auto-starts only when its last remaining prerequisite finishes review and is moved to done; until then it keeps waiting.
 
+### Cross-project link
+
+Purpose: record that a task depends on a task on ANOTHER project's board (for example a web task waiting on a database task). It is display-only: it is listed in the task's \`dependsOn\` and never auto-starts anything.
+
+Command:
+\`${kanbanCommand} task link --task-id <task_id> --linked-task-id <other_task_id> (--linked-project-path <other_project_path> | --linked-project-id <other_project_id>) [--project-path <path>]\`
+
+Parameters:
+- \`--task-id <task_id>\` required. The waiting task, on the board of \`--project-path\` (or the current directory's project).
+- \`--linked-task-id <other_task_id>\` required. The prerequisite task on the other project's board.
+- \`--linked-project-path <other_project_path>\` or \`--linked-project-id <other_project_id>\`: the other project. Use \`${kanbanCommand} project list\` to see project IDs and paths.
+
+Notes:
+- Both projects must already be added to Kanban; the linked task must exist on the other board and not be done.
+- Here \`--task-id\` always depends on \`--linked-task-id\`; there is no reorientation.
+- Use the same-board form (without \`--linked-project-*\`) whenever both tasks are on the same board, since only that form auto-starts the waiting task.
+
 ## task unlink
 
-Purpose: remove an existing task link (dependency) by dependency ID.
+Purpose: remove a task link, by dependency ID or by the two task IDs, or remove a cross-project link.
 
 Command:
 \`${kanbanCommand} task unlink --dependency-id <dependency_id> [--project-path <path>]\`
+\`${kanbanCommand} task unlink --task-id <task_id> --linked-task-id <task_id> [--project-path <path>]\`
+\`${kanbanCommand} task unlink --task-id <task_id> --linked-task-id <other_task_id> (--linked-project-path <other_project_path> | --linked-project-id <other_project_id>) [--project-path <path>]\`
 
 Parameters:
-- \`--dependency-id <dependency_id>\` required dependency ID. Use \`task list\` to inspect existing links.
-- \`--project-path <path>\` optional workspace path. If not already registered in Kanban, it is auto-added for git repos.
+- \`--dependency-id <dependency_id>\` dependency ID of a live same-board link. Use \`task list\` to inspect existing links.
+- \`--task-id <task_id> --linked-task-id <task_id>\` removes \`--linked-task-id\` from \`--task-id\`'s \`dependsOn\`, plus any live link through which it waits on it. Use this form for a \`dependsOn\` entry whose live link is already gone.
+- Adding \`--linked-project-path\` or \`--linked-project-id\` removes a cross-project link instead, as in \`task link\`. \`--linked-project-id\` is the \`projectId\` shown in \`task list\`'s \`dependsOn\`; it also works after that project was removed from Kanban.
+- \`--project-path <path>\` optional workspace path. For a same-board link an unregistered git repo is auto-added; the cross-project form requires it to be added already.
+
+## project list
+
+Purpose: list the projects added to Kanban with their IDs, paths and short names.
+
+Command:
+\`${kanbanCommand} project list\`
+
+Notes:
+- \`shortName\` is the short name the user set (null if none); \`displayShortName\` is what cross-project references to the project's tasks show.
+
+## project short-name
+
+Purpose: set or clear a project's short name, used to show its tasks from other projects (\`db#c64f9\`).
+
+Command:
+\`${kanbanCommand} project short-name (--set <name> | --clear) [--project-path <path> | --project-id <id>]\`
+
+Notes:
+- A short name uses lowercase letters, digits, \`-\` and \`_\`, and must be unique across projects.
+- Without a short name a project shows its ID minus the prefix (ending in \`-\` or \`_\`) that every project ID shares, when there are two or more projects.
+- Only set a short name when the user asks for one.
 
 ## task start
 

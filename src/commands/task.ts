@@ -11,6 +11,7 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { runtimeAgentIdSchema, runtimeClineReasoningEffortSchema } from "../core/api-contract";
+import { resolveProjectShortNames } from "../core/project-short-name";
 import { buildKanbanRuntimeUrl, getKanbanRuntimeOrigin, getRuntimeFetch } from "../core/runtime-endpoint";
 import {
 	addTaskDependency,
@@ -20,12 +21,20 @@ import {
 	moveTaskToColumn,
 	type RuntimeAddTaskDependencyResult,
 	removeTaskDependency,
+	removeTaskPrerequisite,
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
 } from "../core/task-board-mutations";
 import { resolveProjectInputPath } from "../projects/project-path";
-import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
+import { listWorkspaceIndexEntries, loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import type { RuntimeAppRouter } from "../trpc/app-router";
+import {
+	formatDependsOnRefs,
+	linkCrossProjectTask,
+	parseLinkedProjectSelector,
+	parseTaskUnlinkTarget,
+	unlinkCrossProjectTask,
+} from "./task-cross-project-link";
 
 const LIST_TASK_COLUMNS = ["backlog", "in_progress", "review", "trash"] as const;
 type ListTaskColumn = (typeof LIST_TASK_COLUMNS)[number];
@@ -297,6 +306,11 @@ async function notifyRuntimeWorkspaceStateUpdated(
 	await runtimeClient.workspace.notifyStateUpdated.mutate().catch(() => null);
 }
 
+// sked fork: tell a running Kanban that a workspace's board changed on disk; a no-op when none runs.
+async function notifyRuntimeWorkspaceById(workspaceId: string): Promise<void> {
+	await notifyRuntimeWorkspaceStateUpdated(createRuntimeTrpcClient(workspaceId));
+}
+
 async function updateRuntimeWorkspaceState<T>(
 	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>,
 	workspaceRepoPath: string,
@@ -337,10 +351,17 @@ function findTaskRecord(
 	return null;
 }
 
+// sked fork: every task record shows cross-project refs with the same short names as `task list`.
+async function loadProjectShortNames(): Promise<Map<string, string>> {
+	return resolveProjectShortNames(await listWorkspaceIndexEntries());
+}
+
 function formatTaskRecord(
 	state: RuntimeWorkspaceStateResponse,
 	task: RuntimeBoardCard,
 	columnId: RuntimeBoardColumnId,
+	// sked fork: project short names, for each dependsOn entry's `ref` (`db#c64f9`).
+	projectShortNames: ReadonlyMap<string, string>,
 ): JsonRecord {
 	const session = state.sessions[task.id] ?? null;
 	return {
@@ -353,8 +374,9 @@ function formatTaskRecord(
 		autoReviewMode: task.autoReviewMode ?? "commit",
 		...(task.agentId ? { agentId: task.agentId } : {}),
 		...formatTaskClineSettings(task.clineSettings),
-		// sked fork: every prerequisite this task was linked to, finished or not.
-		dependsOn: (task.dependsOn ?? []).map((ref) => ({ ...ref })),
+		// sked fork: every prerequisite this task was linked to, finished or not; `projectId` marks
+		// one on another project's board, and `ref` is how it is displayed (`db#c64f9`).
+		dependsOn: formatDependsOnRefs(task.dependsOn, projectShortNames),
 		createdAt: task.createdAt,
 		updatedAt: task.updatedAt,
 		session: session
@@ -422,6 +444,7 @@ async function listTasks(input: { cwd: string; projectPath?: string; column?: Li
 	});
 	const runtimeClient = createRuntimeTrpcClient(workspace.workspaceId);
 	const state = await runtimeClient.workspace.getState.query();
+	const projectShortNames = await loadProjectShortNames();
 
 	const tasks = state.board.columns.flatMap((boardColumn) => {
 		if (!input.column && boardColumn.id === "trash") {
@@ -430,7 +453,7 @@ async function listTasks(input: { cwd: string; projectPath?: string; column?: Li
 		if (input.column && boardColumn.id !== input.column) {
 			return [];
 		}
-		return boardColumn.cards.map((task) => formatTaskRecord(state, task, boardColumn.id));
+		return boardColumn.cards.map((task) => formatTaskRecord(state, task, boardColumn.id, projectShortNames));
 	});
 
 	return {
@@ -548,6 +571,7 @@ async function updateTaskCommand(input: {
 	clineModelId?: string | null;
 	clineReasoningEffort?: ParsedTaskClineReasoningEffort;
 }): Promise<JsonRecord> {
+	const projectShortNames = await loadProjectShortNames();
 	if (
 		input.title === undefined &&
 		input.prompt === undefined &&
@@ -598,7 +622,7 @@ async function updateTaskCommand(input: {
 
 		return {
 			board: updatedTask.board,
-			value: formatTaskRecord(nextState, updatedTask.task, taskRecord.columnId),
+			value: formatTaskRecord(nextState, updatedTask.task, taskRecord.columnId, projectShortNames),
 		};
 	});
 
@@ -669,6 +693,35 @@ async function unlinkTasks(input: { cwd: string; dependencyId: string; projectPa
 		ok: true,
 		workspacePath: workspaceRepoPath,
 		removedDependency,
+	};
+}
+
+// sked fork: unlink by the two task IDs, which also works after the live link is gone and only the
+// waiting card's `dependsOn` entry is left.
+async function unlinkTaskPrerequisite(input: {
+	cwd: string;
+	taskId: string;
+	linkedTaskId: string;
+	projectPath?: string;
+}): Promise<JsonRecord> {
+	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
+	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
+	const runtimeClient = createRuntimeTrpcClient(workspaceId);
+	await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (runtimeState) => {
+		const unlinked = removeTaskPrerequisite(runtimeState.board, input.taskId, input.linkedTaskId);
+		if (!unlinked.removed) {
+			throw new Error(
+				unlinked.reason === "missing_task"
+					? `Task "${input.taskId}" was not found in workspace ${workspaceRepoPath}.`
+					: `Task "${input.taskId}" does not depend on "${input.linkedTaskId}".`,
+			);
+		}
+		return { board: unlinked.board, value: null };
+	});
+	return {
+		ok: true,
+		workspacePath: workspaceRepoPath,
+		unlinked: { taskId: input.taskId, linkedTaskId: input.linkedTaskId },
 	};
 }
 
@@ -790,6 +843,7 @@ async function trashTaskById(input: {
 	workspaceRepoPath: string;
 	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>;
 }): Promise<TrashTaskExecutionResult> {
+	const projectShortNames = await loadProjectShortNames();
 	const mutation = await mutateWorkspaceState<TrashTaskMutationValue>(input.workspaceRepoPath, (latestState) => {
 		const latestRecord = findTaskRecord(latestState, input.taskId);
 		if (!latestRecord) {
@@ -799,7 +853,7 @@ async function trashTaskById(input: {
 			return {
 				board: latestState.board,
 				value: {
-					task: formatTaskRecord(latestState, latestRecord.task, latestRecord.columnId),
+					task: formatTaskRecord(latestState, latestRecord.task, latestRecord.columnId, projectShortNames),
 					previousColumnId: latestRecord.columnId,
 					readyTaskIds: [] as string[],
 					alreadyInTrash: true,
@@ -820,7 +874,7 @@ async function trashTaskById(input: {
 		return {
 			board: trashed.board,
 			value: {
-				task: formatTaskRecord(nextState, trashed.task, "trash"),
+				task: formatTaskRecord(nextState, trashed.task, "trash", projectShortNames),
 				previousColumnId: latestRecord.columnId,
 				readyTaskIds: trashed.readyTaskIds,
 				alreadyInTrash: false,
@@ -967,6 +1021,7 @@ async function deleteTaskCommand(input: {
 	column?: ListTaskColumn;
 	projectPath?: string;
 }): Promise<JsonRecord> {
+	const projectShortNames = await loadProjectShortNames();
 	const target = resolveTaskCommandTarget(input, "task delete");
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
@@ -1012,7 +1067,7 @@ async function deleteTaskCommand(input: {
 		}
 
 		const deletedTasks = latestTargetRecords.map(({ task, columnId }) =>
-			formatTaskRecord(latestState, task, columnId),
+			formatTaskRecord(latestState, task, columnId, projectShortNames),
 		);
 		const taskIdsRequiringStop = latestTargetRecords
 			.filter(({ columnId }) => columnCanHaveLiveTaskSession(columnId))
@@ -1287,6 +1342,11 @@ export function registerTaskCommand(program: Command): void {
 		.requiredOption("--task-id <id>", "One of the two task IDs to link.")
 		.requiredOption("--linked-task-id <id>", "The other task ID to link.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
+		.option(
+			"--linked-project-path <path>",
+			"Path of another project whose task --task-id depends on (a display-only cross-project link).",
+		)
+		.option("--linked-project-id <id>", "Like --linked-project-path, naming the project by its ID.")
 		.addHelpText(
 			"after",
 			[
@@ -1301,35 +1361,98 @@ export function registerTaskCommand(program: Command): void {
 				"  A backlog task can wait on several prerequisites. It becomes ready to start",
 				"  only when the last of them finishes review and moves to done.",
 				"",
+				"Cross-project links:",
+				"  With --linked-project-path (or --linked-project-id), --task-id depends on",
+				"  --linked-task-id on that other project's board. Both projects must be added",
+				"  to Kanban and the linked task must not be done. The link is display-only: it",
+				"  is listed in the task's dependsOn and never auto-starts anything.",
+				"  Remove it with: task unlink --task-id <id> --linked-task-id <id>",
+				"  --linked-project-path <path> (or --linked-project-id <id>).",
+				"",
 			].join("\n"),
 		)
-		.action(async (options: { taskId: string; linkedTaskId: string; projectPath?: string }) => {
-			await runTaskCommand(
-				async () =>
-					await linkTasks({
+		.action(
+			async (options: {
+				taskId: string;
+				linkedTaskId: string;
+				projectPath?: string;
+				linkedProjectPath?: string;
+				linkedProjectId?: string;
+			}) => {
+				await runTaskCommand(async () => {
+					const linkedProject = parseLinkedProjectSelector(options);
+					if (linkedProject) {
+						return await linkCrossProjectTask({
+							cwd: process.cwd(),
+							projectPath: options.projectPath,
+							taskId: options.taskId,
+							linkedTaskId: options.linkedTaskId,
+							linkedProject,
+							onSaved: notifyRuntimeWorkspaceById,
+						});
+					}
+					return await linkTasks({
 						cwd: process.cwd(),
 						taskId: options.taskId,
 						linkedTaskId: options.linkedTaskId,
 						projectPath: options.projectPath,
-					}),
-			);
-		});
+					});
+				});
+			},
+		);
 
 	task
 		.command("unlink")
-		.description("Remove an existing dependency link.")
-		.requiredOption("--dependency-id <id>", "Dependency ID.")
+		.description("Remove a dependency link, by its ID or by the two task IDs.")
+		.option("--dependency-id <id>", "Dependency ID of a live link between two tasks on this board.")
+		.option("--task-id <id>", "The task that depends on --linked-task-id (instead of --dependency-id).")
+		.option(
+			"--linked-task-id <id>",
+			"The prerequisite to remove from --task-id's dependsOn, with any live link between them.",
+		)
+		.option("--linked-project-path <path>", "When --linked-task-id is on another project's board: its path.")
+		.option(
+			"--linked-project-id <id>",
+			"Like --linked-project-path, by ID (the dependsOn projectId in task list); works after it was removed.",
+		)
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
-		.action(async (options: { dependencyId: string; projectPath?: string }) => {
-			await runTaskCommand(
-				async () =>
-					await unlinkTasks({
+		.action(
+			async (options: {
+				dependencyId?: string;
+				taskId?: string;
+				linkedTaskId?: string;
+				linkedProjectPath?: string;
+				linkedProjectId?: string;
+				projectPath?: string;
+			}) => {
+				await runTaskCommand(async () => {
+					const target = parseTaskUnlinkTarget(options);
+					if (target.kind === "same_project") {
+						return await unlinkTaskPrerequisite({
+							cwd: process.cwd(),
+							taskId: target.taskId,
+							linkedTaskId: target.linkedTaskId,
+							projectPath: options.projectPath,
+						});
+					}
+					if (target.kind === "cross_project") {
+						return await unlinkCrossProjectTask({
+							cwd: process.cwd(),
+							projectPath: options.projectPath,
+							taskId: target.taskId,
+							linkedTaskId: target.linkedTaskId,
+							linkedProject: target.linkedProject,
+							onSaved: notifyRuntimeWorkspaceById,
+						});
+					}
+					return await unlinkTasks({
 						cwd: process.cwd(),
-						dependencyId: options.dependencyId,
+						dependencyId: target.dependencyId,
 						projectPath: options.projectPath,
-					}),
-			);
-		});
+					});
+				});
+			},
+		);
 
 	task
 		.command("start")
