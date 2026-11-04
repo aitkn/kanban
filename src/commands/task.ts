@@ -353,6 +353,8 @@ function formatTaskRecord(
 		autoReviewMode: task.autoReviewMode ?? "commit",
 		...(task.agentId ? { agentId: task.agentId } : {}),
 		...formatTaskClineSettings(task.clineSettings),
+		// sked fork: every prerequisite this task was linked to, finished or not.
+		dependsOn: (task.dependsOn ?? []).map((ref) => ({ ...ref })),
 		createdAt: task.createdAt,
 		updatedAt: task.updatedAt,
 		session: session

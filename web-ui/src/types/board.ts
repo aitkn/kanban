@@ -3,6 +3,7 @@ import type {
 	RuntimeBoardColumnId,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskClineSettings,
+	RuntimeTaskDependsOnRef,
 	RuntimeTaskImage,
 } from "@/runtime/types";
 
@@ -10,6 +11,7 @@ export type BoardColumnId = RuntimeBoardColumnId;
 
 export type TaskAutoReviewMode = RuntimeTaskAutoReviewMode;
 export type TaskImage = RuntimeTaskImage;
+export type TaskDependsOnRef = RuntimeTaskDependsOnRef;
 
 export const DEFAULT_TASK_AUTO_REVIEW_MODE: TaskAutoReviewMode = "commit";
 
@@ -47,6 +49,8 @@ export interface BoardCard {
 	agentId?: RuntimeAgentId;
 	clineSettings?: RuntimeTaskClineSettings;
 	baseRef: string;
+	// sked fork: every prerequisite this card was linked to; never pruned by column moves.
+	dependsOn?: TaskDependsOnRef[];
 	createdAt: number;
 	updatedAt: number;
 }

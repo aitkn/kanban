@@ -585,6 +585,35 @@ describe("board dependency state", () => {
 		]);
 	});
 
+	// sked fork: the browser saves the board it normalized, so a dropped field would be erased on disk.
+	it("keeps each card's dependsOn record and drops malformed entries", () => {
+		const normalized = normalizeBoardData({
+			columns: [
+				{
+					id: "backlog",
+					cards: [
+						{
+							id: "a",
+							prompt: "Task A",
+							startInPlanMode: false,
+							baseRef: "main",
+							dependsOn: [{ taskId: "b" }, { taskId: "x", projectId: "other" }, { taskId: "" }, "c", null],
+						},
+						{ id: "b", prompt: "Task B", startInPlanMode: false, baseRef: "main" },
+					],
+				},
+				{ id: "in_progress", cards: [] },
+				{ id: "review", cards: [] },
+				{ id: "trash", cards: [] },
+			],
+			dependencies: [],
+		});
+
+		const cards = normalized?.columns.find((column) => column.id === "backlog")?.cards ?? [];
+		expect(cards[0]?.dependsOn).toEqual([{ taskId: "b" }, { taskId: "x", projectId: "other" }]);
+		expect(cards[1]?.dependsOn).toBeUndefined();
+	});
+
 	it("disables auto-review settings for a task", () => {
 		let board = createInitialBoardData();
 		board = addTaskToColumn(board, "review", {

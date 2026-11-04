@@ -15,6 +15,7 @@ import {
 	DEFAULT_TASK_AUTO_REVIEW_MODE,
 	resolveTaskAutoReviewMode,
 	type TaskAutoReviewMode,
+	type TaskDependsOnRef,
 	type TaskImage,
 } from "@/types";
 
@@ -96,6 +97,29 @@ function normalizeTaskImages(rawImages: unknown): TaskImage[] | undefined {
 	return images.length > 0 ? images : undefined;
 }
 
+// sked fork: keep the card's prerequisite record, or saving the board from the browser would erase it.
+function normalizeTaskDependsOn(rawDependsOn: unknown): TaskDependsOnRef[] | undefined {
+	if (!Array.isArray(rawDependsOn)) {
+		return undefined;
+	}
+	const dependsOn: TaskDependsOnRef[] = [];
+	for (const rawRef of rawDependsOn) {
+		if (!rawRef || typeof rawRef !== "object") {
+			continue;
+		}
+		const ref = rawRef as { taskId?: unknown; projectId?: unknown };
+		const taskId = typeof ref.taskId === "string" ? ref.taskId.trim() : "";
+		if (!taskId) {
+			continue;
+		}
+		dependsOn.push({
+			taskId,
+			...(typeof ref.projectId === "string" && ref.projectId ? { projectId: ref.projectId } : {}),
+		});
+	}
+	return dependsOn;
+}
+
 function normalizeTaskClineReasoningEffort(rawReasoningEffort: unknown): RuntimeClineReasoningEffort | undefined {
 	if (
 		rawReasoningEffort === "low" ||
@@ -162,6 +186,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		clineProviderId?: unknown;
 		clineModelId?: unknown;
 		clineReasoningEffort?: unknown;
+		dependsOn?: unknown;
 		createdAt?: unknown;
 		updatedAt?: unknown;
 	};
@@ -184,6 +209,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		legacyReasoningEffort: card.clineReasoningEffort,
 	});
 
+	const dependsOn = normalizeTaskDependsOn(card.dependsOn);
 	const now = Date.now();
 
 	return {
@@ -199,6 +225,7 @@ function normalizeCard(rawCard: unknown): BoardCard | null {
 		baseRef,
 		...(typeof card.agentId === "string" && card.agentId ? { agentId: card.agentId as RuntimeAgentId } : {}),
 		...(clineSettings !== undefined ? { clineSettings } : {}),
+		...(dependsOn !== undefined ? { dependsOn } : {}),
 		createdAt: typeof card.createdAt === "number" ? card.createdAt : now,
 		updatedAt: typeof card.updatedAt === "number" ? card.updatedAt : now,
 	};

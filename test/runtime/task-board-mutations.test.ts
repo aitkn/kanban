@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { RuntimeBoardColumnId, RuntimeBoardData } from "../../src/core/api-contract";
+import { type RuntimeBoardColumnId, type RuntimeBoardData, runtimeBoardDataSchema } from "../../src/core/api-contract";
 import {
 	addTaskDependency,
 	addTaskToColumn,
 	countPendingPrerequisites,
 	deleteTasksFromBoard,
 	moveTaskToColumn,
+	recordLinkedPrerequisites,
+	recordTaskPrerequisite,
+	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
 } from "../../src/core/task-board-mutations";
@@ -542,5 +545,257 @@ describe("countPendingPrerequisites", () => {
 		expect(countPendingPrerequisites(board, "waiting")).toBe(3);
 		expect(countPendingPrerequisites(board, "third")).toBe(0);
 		expect(countPendingPrerequisites(trashTaskAndGetReadyLinkedTaskIds(board, "first").board, "waiting")).toBe(2);
+	});
+});
+
+describe("dependsOn (sked fork: persistent prerequisite record)", () => {
+	function dependsOnOf(board: RuntimeBoardData, taskId: string) {
+		for (const column of board.columns) {
+			const card = column.cards.find((candidate) => candidate.id === taskId);
+			if (card) {
+				return card.dependsOn ?? [];
+			}
+		}
+		throw new Error(`Task ${taskId} not found.`);
+	}
+
+	it("records the prerequisite on the waiting card when a link is created", () => {
+		const board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "review"],
+			]),
+			"waiting",
+			"prereq",
+		);
+
+		expect(dependsOnOf(board, "waiting")).toEqual([{ taskId: "prereq" }]);
+		expect(dependsOnOf(board, "prereq")).toEqual([]);
+	});
+
+	it("uses the backlog card as the waiting side whatever order the link arguments come in", () => {
+		const board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "in_progress"],
+			]),
+			"prereq",
+			"waiting",
+		);
+
+		expect(dependsOnOf(board, "waiting")).toEqual([{ taskId: "prereq" }]);
+		expect(dependsOnOf(board, "prereq")).toEqual([]);
+	});
+
+	it("does not duplicate a prerequisite that is linked again", () => {
+		let board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "review"],
+			]),
+			"waiting",
+			"prereq",
+		);
+		// Starting the waiting card prunes the live link; sending it back to backlog allows linking again.
+		board = moveTaskToColumn(board, "waiting", "in_progress").board;
+		board = moveTaskToColumn(board, "waiting", "backlog").board;
+		expect(board.dependencies).toEqual([]);
+		board = link(board, "waiting", "prereq");
+
+		expect(dependsOnOf(board, "waiting")).toEqual([{ taskId: "prereq" }]);
+		expect(dependsOnOf(recordTaskPrerequisite(board, "waiting", "prereq"), "waiting")).toEqual([
+			{ taskId: "prereq" },
+		]);
+	});
+
+	it("removes only the unlinked prerequisite", () => {
+		let board = boardWithTasks([
+			["waiting", "backlog"],
+			["first", "review"],
+			["second", "in_progress"],
+		]);
+		board = link(board, "waiting", "first");
+		board = link(board, "waiting", "second");
+		const firstLink = board.dependencies.find((dependency) => dependency.toTaskId === "first");
+		if (!firstLink) {
+			throw new Error("Expected the first link.");
+		}
+
+		const unlinked = removeTaskDependency(board, firstLink.id);
+
+		expect(unlinked.removed).toBe(true);
+		expect(dependsOnOf(unlinked.board, "waiting")).toEqual([{ taskId: "second" }]);
+		expect(unlinked.board.dependencies).toEqual([
+			expect.objectContaining({ fromTaskId: "waiting", toTaskId: "second" }),
+		]);
+	});
+
+	it("leaves dependsOn alone when the dependency id is unknown", () => {
+		const board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "review"],
+			]),
+			"waiting",
+			"prereq",
+		);
+
+		const unlinked = removeTaskDependency(board, "missing");
+
+		expect(unlinked.removed).toBe(false);
+		expect(unlinked.board).toBe(board);
+	});
+
+	it("survives the prerequisite moving to done", () => {
+		const board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["first", "review"],
+				["second", "review"],
+			]),
+			"waiting",
+			"first",
+		);
+		const linkedBoth = link(board, "waiting", "second");
+
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(linkedBoth, "first");
+
+		expect(trashed.board.dependencies).toEqual([
+			expect.objectContaining({ fromTaskId: "waiting", toTaskId: "second" }),
+		]);
+		expect(dependsOnOf(trashed.board, "waiting")).toEqual([{ taskId: "first" }, { taskId: "second" }]);
+	});
+
+	it("survives the dependent card starting", () => {
+		const board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "review"],
+			]),
+			"waiting",
+			"prereq",
+		);
+
+		const started = moveTaskToColumn(board, "waiting", "in_progress");
+		const reviewed = moveTaskToColumn(started.board, "waiting", "review");
+		const done = moveTaskToColumn(reviewed.board, "waiting", "trash");
+
+		expect(started.board.dependencies).toEqual([]);
+		expect(dependsOnOf(started.board, "waiting")).toEqual([{ taskId: "prereq" }]);
+		expect(dependsOnOf(done.board, "waiting")).toEqual([{ taskId: "prereq" }]);
+	});
+
+	it("keeps the reference when the prerequisite card is deleted", () => {
+		const board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "review"],
+			]),
+			"waiting",
+			"prereq",
+		);
+
+		const deleted = deleteTasksFromBoard(trashTaskAndGetReadyLinkedTaskIds(board, "prereq").board, ["prereq"]);
+
+		expect(dependsOnOf(deleted.board, "waiting")).toEqual([{ taskId: "prereq" }]);
+	});
+
+	it("backfills links created before dependsOn existed, and is a no-op once recorded", () => {
+		let board = boardWithTasks([
+			["waiting", "backlog"],
+			["first", "review"],
+			["second", "backlog"],
+		]);
+		// A pre-upgrade board: live links, no dependsOn on any card.
+		board = {
+			...board,
+			dependencies: [
+				{ id: "dep-1", fromTaskId: "waiting", toTaskId: "first", createdAt: 1 },
+				{ id: "dep-2", fromTaskId: "waiting", toTaskId: "second", createdAt: 2 },
+			],
+		};
+
+		const backfilled = recordLinkedPrerequisites(board);
+
+		expect(dependsOnOf(backfilled, "waiting")).toEqual([{ taskId: "first" }, { taskId: "second" }]);
+		expect(dependsOnOf(backfilled, "first")).toEqual([]);
+		expect(backfilled.dependencies).toBe(board.dependencies);
+		expect(recordLinkedPrerequisites(backfilled)).toBe(backfilled);
+	});
+
+	describe("a link flipped by the waiting card starting while its prerequisite is in backlog", () => {
+		function flippedBoard(): RuntimeBoardData {
+			const linked = link(
+				boardWithTasks([
+					["waiting", "backlog"],
+					["prereq", "backlog"],
+				]),
+				"waiting",
+				"prereq",
+			);
+			const started = moveTaskToColumn(linked, "waiting", "in_progress").board;
+			// Unchanged upstream behaviour: the backlog card becomes the link's waiting side.
+			expect(started.dependencies).toEqual([expect.objectContaining({ fromTaskId: "prereq", toTaskId: "waiting" })]);
+			return started;
+		}
+
+		it("is not backfilled the other way round", () => {
+			const board = flippedBoard();
+
+			const backfilled = recordLinkedPrerequisites(board);
+
+			expect(backfilled).toBe(board);
+			expect(dependsOnOf(backfilled, "prereq")).toEqual([]);
+			expect(dependsOnOf(backfilled, "waiting")).toEqual([{ taskId: "prereq" }]);
+		});
+
+		it("is forgotten on the card that recorded it when unlinked", () => {
+			const board = flippedBoard();
+			const flipped = board.dependencies[0];
+			if (!flipped) {
+				throw new Error("Expected the flipped link.");
+			}
+
+			const unlinked = removeTaskDependency(board, flipped.id);
+
+			expect(unlinked.board.dependencies).toEqual([]);
+			expect(dependsOnOf(unlinked.board, "waiting")).toEqual([]);
+			expect(dependsOnOf(unlinked.board, "prereq")).toEqual([]);
+		});
+	});
+
+	it("backfills a pre-upgrade link even when one of its cards was linked after the upgrade", () => {
+		let board = boardWithTasks([
+			["old-waiting", "backlog"],
+			["shared", "review"],
+			["new-waiting", "backlog"],
+		]);
+		board = {
+			...board,
+			dependencies: [{ id: "legacy", fromTaskId: "old-waiting", toTaskId: "shared", createdAt: 1 }],
+		};
+		board = link(board, "new-waiting", "shared");
+
+		const backfilled = recordLinkedPrerequisites(board);
+
+		expect(dependsOnOf(backfilled, "old-waiting")).toEqual([{ taskId: "shared" }]);
+		expect(dependsOnOf(backfilled, "new-waiting")).toEqual([{ taskId: "shared" }]);
+		expect(dependsOnOf(backfilled, "shared")).toEqual([]);
+	});
+
+	it("round-trips through the board schema, and loads cards saved before the field existed", () => {
+		const board = link(
+			boardWithTasks([
+				["waiting", "backlog"],
+				["prereq", "review"],
+			]),
+			"waiting",
+			"prereq",
+		);
+
+		const parsed = runtimeBoardDataSchema.parse(JSON.parse(JSON.stringify(board)));
+
+		expect(dependsOnOf(parsed, "waiting")).toEqual([{ taskId: "prereq" }]);
+		expect(parsed.columns.find((column) => column.id === "review")?.cards[0]?.dependsOn).toBeUndefined();
 	});
 });

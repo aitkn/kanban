@@ -17,6 +17,9 @@ import {
 import type { KeyboardEvent, MouseEvent } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { DependsOnChips } from "@/components/dependencies/depends-on-chips";
+import { TaskIdBadge } from "@/components/dependencies/task-id-badge";
+import type { TaskReferences } from "@/components/dependencies/use-task-reference-navigation";
 import {
 	formatClineReasoningEffortLabel,
 	formatClineSelectedModelButtonText,
@@ -257,6 +260,7 @@ export function BoardCard({
 	workspacePath,
 	defaultClineModelId = null,
 	pendingPrerequisiteCount = 0,
+	taskReferences,
 }: {
 	card: BoardCardModel;
 	index: number;
@@ -282,6 +286,8 @@ export function BoardCard({
 	workspacePath?: string | null;
 	defaultClineModelId?: string | null;
 	pendingPrerequisiteCount?: number;
+	/** sked fork: resolves and opens the cards in `card.dependsOn`; without it no chips render. */
+	taskReferences?: TaskReferences;
 }): React.ReactElement {
 	const [isHovered, setIsHovered] = useState(false);
 	const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -634,6 +640,8 @@ export function BoardCard({
 										</p>
 									)}
 								</div>
+								{/* sked fork: the card id, click to copy. */}
+								<TaskIdBadge taskId={card.id} muted={isTrashCard} />
 								{/* sked fork: how many linked tasks a joined backlog card still waits on. */}
 								{columnId === "backlog" && pendingPrerequisiteCount > 1 ? (
 									<Tooltip
@@ -773,6 +781,8 @@ export function BoardCard({
 									</span>
 								</div>
 							) : null}
+							{/* sked fork: the cards this one was linked to, coloured by their current column. */}
+							<DependsOnChips dependsOn={card.dependsOn} taskReferences={taskReferences} />
 							{sessionActivity ? (
 								<div
 									className="flex gap-1.5 items-start mt-[6px]"

@@ -4,6 +4,10 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BoardCard } from "@/components/board-card";
+import {
+	type TaskReferences,
+	useTaskReferenceNavigation,
+} from "@/components/dependencies/use-task-reference-navigation";
 import { Button } from "@/components/ui/button";
 import { ColumnIndicator } from "@/components/ui/column-indicator";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
@@ -34,6 +38,7 @@ function ColumnSection({
 	activeDragSourceColumnId,
 	workspacePath,
 	defaultClineModelId,
+	taskReferences,
 }: {
 	column: BoardColumn;
 	selectedCardId: string;
@@ -58,6 +63,7 @@ function ColumnSection({
 	activeDragSourceColumnId?: BoardColumnId | null;
 	workspacePath?: string | null;
 	defaultClineModelId?: string | null;
+	taskReferences?: TaskReferences;
 }): React.ReactElement {
 	const [open, setOpen] = useState(defaultOpen);
 	const canCreate = column.id === "backlog" && onCreateTask;
@@ -201,6 +207,7 @@ function ColumnSection({
 												workspacePath={workspacePath}
 												defaultClineModelId={defaultClineModelId}
 												onSaveTitle={onSaveTitle}
+												taskReferences={taskReferences}
 												onClick={() => {
 													if (column.id === "backlog") {
 														onEditTask?.(card);
@@ -276,6 +283,8 @@ export function ColumnContextPanel({
 }): React.ReactElement {
 	const [activeDragSourceColumnId, setActiveDragSourceColumnId] = useState<BoardColumnId | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+	// sked fork: lets each card's prerequisite chips resolve and open the cards they name.
+	const taskReferences = useTaskReferenceNavigation({ columns: selection.allColumns, onCardSelect, onEditTask });
 
 	const handleBeforeCapture = useCallback(
 		(start: BeforeCapture) => {
@@ -361,6 +370,7 @@ export function ColumnContextPanel({
 							openPrTaskLoadingById={column.id === "review" ? openPrTaskLoadingById : undefined}
 							moveToTrashLoadingById={column.id === "review" ? moveToTrashLoadingById : undefined}
 							activeDragSourceColumnId={activeDragSourceColumnId}
+							taskReferences={taskReferences}
 							workspacePath={workspacePath}
 							defaultClineModelId={defaultClineModelId}
 						/>

@@ -129,6 +129,17 @@ function normalizeRuntimeTaskClineSettings(input: {
 	};
 }
 
+/**
+ * sked fork: a prerequisite this card was linked to. Kept on the card because
+ * `board.dependencies` links are pruned once either side leaves backlog or reaches done.
+ * `projectId` is unset for a card in the same project (reserved for cross-project refs).
+ */
+export const runtimeTaskDependsOnRefSchema = z.object({
+	taskId: z.string(),
+	projectId: z.string().optional(),
+});
+export type RuntimeTaskDependsOnRef = z.infer<typeof runtimeTaskDependsOnRefSchema>;
+
 export const runtimeBoardCardSchema = z
 	.object({
 		id: z.string(),
@@ -144,6 +155,8 @@ export const runtimeBoardCardSchema = z
 		clineModelId: z.string().optional(),
 		clineReasoningEffort: runtimeLegacyTaskClineReasoningEffortSchema.optional(),
 		baseRef: z.string(),
+		// sked fork: never pruned by column moves; absent on cards saved before this field existed.
+		dependsOn: z.array(runtimeTaskDependsOnRefSchema).optional(),
 		createdAt: z.number(),
 		updatedAt: z.number(),
 	})
