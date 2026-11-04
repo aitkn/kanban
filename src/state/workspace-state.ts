@@ -17,7 +17,7 @@ import {
 	runtimeWorkspaceStateSaveRequestSchema,
 } from "../core/api-contract";
 import { createGitProcessEnv } from "../core/git-process-env";
-import { updateTaskDependencies } from "../core/task-board-mutations";
+import { recordLinkedPrerequisites, updateTaskDependencies } from "../core/task-board-mutations";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 
 const RUNTIME_HOME_PARENT_DIR = ".cline";
@@ -295,9 +295,11 @@ function parseWorkspaceStateSavePayload(payload: RuntimeWorkspaceStateSaveReques
 async function readWorkspaceBoard(workspaceId: string): Promise<RuntimeBoardData> {
 	const boardPath = getWorkspaceBoardPath(workspaceId);
 	const rawBoard = await readJsonFile(boardPath);
-	return updateTaskDependencies(
+	const board = updateTaskDependencies(
 		parsePersistedStateFile(boardPath, BOARD_FILENAME, rawBoard, runtimeBoardDataSchema, createEmptyBoard()),
 	);
+	// sked fork: links made before cards kept `dependsOn` get recorded; persisted by the next save.
+	return recordLinkedPrerequisites(board);
 }
 
 export async function loadWorkspaceBoardById(workspaceId: string): Promise<RuntimeBoardData> {

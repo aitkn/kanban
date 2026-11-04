@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardColumn } from "@/components/board-column";
 import { DependencyOverlay } from "@/components/dependencies/dependency-overlay";
 import { useDependencyLinking } from "@/components/dependencies/use-dependency-linking";
+import { useTaskReferenceNavigation } from "@/components/dependencies/use-task-reference-navigation";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { canCreateTaskDependency, getPendingPrerequisiteCountByTaskId } from "@/state/board-state";
 import { findCardColumnId, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
@@ -102,6 +103,8 @@ export function KanbanBoard({
 	}, [data]);
 
 	const pendingPrerequisiteCountByTaskId = useMemo(() => getPendingPrerequisiteCountByTaskId(data), [data]);
+	// sked fork: lets each card's prerequisite chips resolve and open the cards they name.
+	const taskReferences = useTaskReferenceNavigation({ columns: data.columns, onCardSelect, onEditTask });
 
 	const programmaticSensor: Sensor = useCallback((api: SensorAPI) => {
 		sensorApiRef.current = api;
@@ -414,6 +417,7 @@ export function KanbanBoard({
 						pendingPrerequisiteCountByTaskId={
 							column.id === "backlog" ? pendingPrerequisiteCountByTaskId : undefined
 						}
+						taskReferences={taskReferences}
 						workspacePath={workspacePath}
 						defaultClineModelId={defaultClineModelId}
 						onCardClick={(card) => {

@@ -262,6 +262,53 @@ describe.sequential("workspace-state integration", () => {
 		});
 	});
 
+	// sked fork: links made before cards kept dependsOn are recorded when the board is read.
+	it("backfills dependsOn from live links in a board saved before the field existed", async () => {
+		await withTemporaryHome(async () => {
+			const { path: sandboxRoot, cleanup } = createTempDir("kanban-depends-on-backfill-");
+			try {
+				const workspacePath = join(sandboxRoot, "project-legacy-links");
+				mkdirSync(workspacePath, { recursive: true });
+				initGitRepository(workspacePath);
+
+				const context = await loadWorkspaceContext(workspacePath);
+				mkdirSync(context.statePath, { recursive: true });
+				const card = (id: string) => ({
+					id,
+					prompt: `Task ${id}`,
+					startInPlanMode: false,
+					baseRef: "main",
+					createdAt: 1,
+					updatedAt: 1,
+				});
+				writeFileSync(
+					join(context.statePath, "board.json"),
+					JSON.stringify({
+						columns: [
+							{ id: "backlog", title: "Backlog", cards: [card("waiting")] },
+							{ id: "in_progress", title: "In Progress", cards: [card("prereq")] },
+							{ id: "review", title: "Review", cards: [] },
+							{ id: "trash", title: "Done", cards: [] },
+						],
+						dependencies: [{ id: "dep-1", fromTaskId: "waiting", toTaskId: "prereq", createdAt: 1 }],
+					}),
+					"utf8",
+				);
+
+				const loaded = await loadWorkspaceState(workspacePath);
+
+				expect(loaded.revision).toBe(0);
+				expect(loaded.board.columns[0]?.cards[0]?.dependsOn).toEqual([{ taskId: "prereq" }]);
+				expect(loaded.board.columns[1]?.cards[0]?.dependsOn).toBeUndefined();
+				expect(loaded.board.dependencies).toEqual([
+					expect.objectContaining({ fromTaskId: "waiting", toTaskId: "prereq" }),
+				]);
+			} finally {
+				cleanup();
+			}
+		});
+	});
+
 	it("fails loudly when persisted board data is malformed", async () => {
 		await withTemporaryHome(async () => {
 			const { path: sandboxRoot, cleanup } = createTempDir("kanban-malformed-board-");

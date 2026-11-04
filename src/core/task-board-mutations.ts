@@ -6,6 +6,7 @@ import type {
 	RuntimeBoardDependency,
 	RuntimeTaskAutoReviewMode,
 	RuntimeTaskClineSettings,
+	RuntimeTaskDependsOnRef,
 	RuntimeTaskImage,
 } from "./api-contract";
 import { createUniqueTaskId } from "./task-id";
@@ -169,6 +170,72 @@ function findTaskLocation(
 		};
 	}
 	return null;
+}
+
+function isSameProjectRef(ref: RuntimeTaskDependsOnRef, taskId: string): boolean {
+	return ref.taskId === taskId && ref.projectId === undefined;
+}
+
+function updateCardDependsOn(
+	board: RuntimeBoardData,
+	taskId: string,
+	update: (dependsOn: RuntimeTaskDependsOnRef[]) => RuntimeTaskDependsOnRef[] | null,
+): RuntimeBoardData {
+	const found = findTaskLocation(board, taskId);
+	if (!found) {
+		return board;
+	}
+	const dependsOn = update(found.task.dependsOn ?? []);
+	if (!dependsOn) {
+		return board;
+	}
+	const cards = [...(board.columns[found.columnIndex]?.cards ?? [])];
+	cards[found.taskIndex] = { ...found.task, dependsOn };
+	return {
+		...board,
+		columns: board.columns.map((column, index) => (index === found.columnIndex ? { ...column, cards } : column)),
+	};
+}
+
+/**
+ * sked fork: remember on the waiting card that it was linked to a same-project prerequisite.
+ * Unlike `board.dependencies`, this record survives either card changing column.
+ */
+export function recordTaskPrerequisite(
+	board: RuntimeBoardData,
+	waitingTaskId: string,
+	prerequisiteTaskId: string,
+): RuntimeBoardData {
+	return updateCardDependsOn(board, waitingTaskId, (dependsOn) =>
+		dependsOn.some((ref) => isSameProjectRef(ref, prerequisiteTaskId))
+			? null
+			: [...dependsOn, { taskId: prerequisiteTaskId }],
+	);
+}
+
+/**
+ * sked fork: record every live link on its waiting card. Links created before `dependsOn` existed
+ * were never recorded, and linking the pair again is refused as a duplicate, so the board is
+ * backfilled when it is read. Returns the same board when every link is already recorded.
+ */
+export function recordLinkedPrerequisites(board: RuntimeBoardData): RuntimeBoardData {
+	return board.dependencies.reduce(
+		(current, dependency) => recordTaskPrerequisite(current, dependency.fromTaskId, dependency.toTaskId),
+		board,
+	);
+}
+
+/** sked fork: drop a same-project prerequisite from the waiting card's `dependsOn` (an explicit unlink). */
+export function forgetTaskPrerequisite(
+	board: RuntimeBoardData,
+	waitingTaskId: string,
+	prerequisiteTaskId: string,
+): RuntimeBoardData {
+	return updateCardDependsOn(board, waitingTaskId, (dependsOn) =>
+		dependsOn.some((ref) => isSameProjectRef(ref, prerequisiteTaskId))
+			? dependsOn.filter((ref) => !isSameProjectRef(ref, prerequisiteTaskId))
+			: null,
+	);
 }
 
 function resolveDependencyEndpoints(
@@ -385,10 +452,15 @@ export function addTaskDependency(
 		createdAt: Date.now(),
 	};
 	return {
-		board: {
-			...board,
-			dependencies: [...board.dependencies, dependency],
-		},
+		// sked fork: also record the prerequisite on the waiting card, see recordTaskPrerequisite.
+		board: recordTaskPrerequisite(
+			{
+				...board,
+				dependencies: [...board.dependencies, dependency],
+			},
+			dependency.fromTaskId,
+			dependency.toTaskId,
+		),
 		added: true,
 		dependency,
 	};
@@ -408,15 +480,21 @@ export function canAddTaskDependency(board: RuntimeBoardData, firstTaskId: strin
 }
 
 export function removeTaskDependency(board: RuntimeBoardData, dependencyId: string): RuntimeRemoveTaskDependencyResult {
-	const dependencies = board.dependencies.filter((dependency) => dependency.id !== dependencyId);
-	if (dependencies.length === board.dependencies.length) {
+	const removedDependency = board.dependencies.find((dependency) => dependency.id === dependencyId);
+	if (!removedDependency) {
 		return { board, removed: false };
 	}
+	const dependencies = board.dependencies.filter((dependency) => dependency.id !== dependencyId);
 	return {
-		board: {
-			...board,
-			dependencies,
-		},
+		// sked fork: an explicit unlink also forgets the prerequisite on the waiting card.
+		board: forgetTaskPrerequisite(
+			{
+				...board,
+				dependencies,
+			},
+			removedDependency.fromTaskId,
+			removedDependency.toTaskId,
+		),
 		removed: true,
 	};
 }

@@ -187,6 +187,7 @@ Command:
 Parameters:
 - \`--project-path <path>\` optional workspace path. If omitted, uses the current working directory workspace.
 - \`--column <value>\` optional filter. Allowed values: \`backlog\`, \`in_progress\`, \`review\`, \`done\` (\`trash\` is also accepted).
+- Each task's \`dependsOn\` lists every task it was linked to as a prerequisite, kept after that task finishes or this one starts; only \`task unlink\` removes an entry. \`dependencies\` holds only the links still waiting to auto-start a task.
 
 ## task create
 

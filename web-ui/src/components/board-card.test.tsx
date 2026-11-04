@@ -4,13 +4,21 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardCard } from "@/components/board-card";
+import { useTaskReferenceNavigation } from "@/components/dependencies/use-task-reference-navigation";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
-import type { ReviewTaskWorkspaceSnapshot } from "@/types";
+import type { BoardCard as BoardCardModel, BoardColumn, ReviewTaskWorkspaceSnapshot } from "@/types";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
 let mockMeasureWidths = [240, 240, 240];
 let mockMeasureCallCount = 0;
+
+const mockShowAppToast = vi.hoisted(() => vi.fn());
+const mockCopyToClipboard = vi.hoisted(() => vi.fn());
+
+vi.mock("@/components/app-toaster", () => ({
+	showAppToast: mockShowAppToast,
+}));
 
 vi.mock("@hello-pangea/dnd", () => ({
 	Draggable: ({
@@ -35,6 +43,7 @@ vi.mock("@/stores/workspace-metadata-store", () => ({
 
 vi.mock("@/utils/react-use", () => ({
 	useMedia: () => false,
+	useCopyToClipboard: () => [{ value: undefined, error: undefined, noUserInteraction: true }, mockCopyToClipboard],
 	useMeasure: () => {
 		mockMeasureCallCount += 1;
 		const width = mockMeasureWidths[(mockMeasureCallCount - 1) % mockMeasureWidths.length] ?? 240;
@@ -144,6 +153,8 @@ describe("BoardCard", () => {
 	let previousActEnvironment: boolean | undefined;
 
 	beforeEach(() => {
+		mockShowAppToast.mockReset();
+		mockCopyToClipboard.mockReset();
 		mockWorkspaceSnapshot = undefined;
 		mockMeasureWidths = [240, 240, 240];
 		mockMeasureCallCount = 0;
@@ -791,5 +802,166 @@ describe("BoardCard", () => {
 
 		expect(container.textContent).toContain("checking the next file");
 		expect(container.textContent).not.toContain("Agent:");
+	});
+
+	describe("card id and prerequisite chips (sked fork)", () => {
+		function column(id: BoardColumn["id"], title: string, cards: BoardCardModel[]): BoardColumn {
+			return { id, title, cards };
+		}
+
+		const waitingCard = createCard({
+			id: "wait1",
+			title: "Waiting card",
+			prompt: "Waiting card",
+			dependsOn: [
+				{ taskId: "back1" },
+				{ taskId: "prog1" },
+				{ taskId: "revw1" },
+				{ taskId: "done1" },
+				{ taskId: "gone1" },
+			],
+		});
+		const columns: BoardColumn[] = [
+			column("backlog", "Backlog", [createCard({ id: "back1", title: "Backlog prereq", prompt: "Backlog prereq" })]),
+			column("in_progress", "In Progress", [
+				waitingCard,
+				createCard({ id: "prog1", title: "Running prereq", prompt: "Running prereq" }),
+			]),
+			column("review", "Review", [createCard({ id: "revw1", title: "Review prereq", prompt: "Review prereq" })]),
+			column("trash", "Done", [createCard({ id: "done1", title: "Done prereq", prompt: "Done prereq" })]),
+		];
+
+		function ChipHarness({
+			onCardClick,
+			onCardSelect,
+			onEditTask,
+		}: {
+			onCardClick: () => void;
+			onCardSelect: (taskId: string) => void;
+			onEditTask: (card: BoardCardModel) => void;
+		}): React.ReactElement {
+			const taskReferences = useTaskReferenceNavigation({ columns, onCardSelect, onEditTask });
+			return (
+				<TooltipProvider>
+					<BoardCard
+						card={waitingCard}
+						index={0}
+						columnId="in_progress"
+						onClick={onCardClick}
+						taskReferences={taskReferences}
+					/>
+				</TooltipProvider>
+			);
+		}
+
+		async function renderChips() {
+			const handlers = { onCardClick: vi.fn(), onCardSelect: vi.fn(), onEditTask: vi.fn() };
+			await act(async () => {
+				root.render(<ChipHarness {...handlers} />);
+			});
+			return handlers;
+		}
+
+		function chip(taskId: string): HTMLButtonElement {
+			const found = Array.from(container.querySelectorAll<HTMLButtonElement>("button[data-reference-state]")).find(
+				(button) => button.textContent === taskId,
+			);
+			if (!found) {
+				throw new Error(`No chip for ${taskId}`);
+			}
+			return found;
+		}
+
+		async function press(button: HTMLButtonElement): Promise<MouseEvent> {
+			const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+			await act(async () => {
+				button.dispatchEvent(mouseDown);
+				button.click();
+			});
+			return mouseDown;
+		}
+
+		it("shows the card id and copies it on click without opening the card", async () => {
+			const handlers = await renderChips();
+			const idButton = container.querySelector<HTMLButtonElement>('button[aria-label="Copy task id wait1"]');
+			expect(idButton?.textContent).toBe("wait1");
+			expect(idButton?.className).toContain("font-mono");
+
+			const mouseDown = await press(idButton as HTMLButtonElement);
+
+			expect(mouseDown.defaultPrevented).toBe(true);
+			expect(mockCopyToClipboard).toHaveBeenCalledWith("wait1");
+			expect(handlers.onCardClick).not.toHaveBeenCalled();
+		});
+
+		it("colours each prerequisite chip by the referenced card's current column", async () => {
+			await renderChips();
+
+			expect(
+				Array.from(container.querySelectorAll("button[data-reference-state]")).map((button) => [
+					button.textContent,
+					button.getAttribute("data-reference-state"),
+				]),
+			).toEqual([
+				["back1", "backlog"],
+				["prog1", "in_progress"],
+				["revw1", "review"],
+				["done1", "trash"],
+				["gone1", "deleted"],
+			]);
+			expect(chip("back1").className).toContain("text-status-red");
+			expect(chip("prog1").className).toContain("text-status-orange");
+			expect(chip("revw1").className).toContain("text-status-gold");
+			expect(chip("done1").className).toContain("text-status-green");
+			expect(chip("gone1").className).toContain("line-through");
+			expect(chip("gone1").className).toContain("text-text-tertiary");
+			expect(chip("gone1").getAttribute("aria-label")).toContain("card deleted");
+		});
+
+		it("opens the referenced card as clicking it would, without opening or dragging this card", async () => {
+			const handlers = await renderChips();
+
+			const mouseDown = await press(chip("revw1"));
+			await press(chip("prog1"));
+			await press(chip("back1"));
+
+			expect(mouseDown.defaultPrevented).toBe(true);
+			expect(handlers.onCardSelect.mock.calls).toEqual([["revw1"], ["prog1"]]);
+			expect(handlers.onEditTask).toHaveBeenCalledWith(expect.objectContaining({ id: "back1" }));
+			expect(handlers.onCardClick).not.toHaveBeenCalled();
+		});
+
+		it("explains instead of opening a deleted or done prerequisite", async () => {
+			const handlers = await renderChips();
+
+			await press(chip("gone1"));
+			await press(chip("done1"));
+
+			expect(mockShowAppToast).toHaveBeenNthCalledWith(
+				1,
+				expect.objectContaining({ message: "card no longer exists" }),
+			);
+			expect(mockShowAppToast).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({ message: expect.stringContaining("done1") }),
+			);
+			expect(handlers.onCardSelect).not.toHaveBeenCalled();
+			expect(handlers.onEditTask).not.toHaveBeenCalled();
+			expect(handlers.onCardClick).not.toHaveBeenCalled();
+		});
+
+		it("renders no chips without task references or prerequisites", async () => {
+			await act(async () => {
+				root.render(
+					<TooltipProvider>
+						<BoardCard card={waitingCard} index={0} columnId="in_progress" />
+						<BoardCard card={createCard({ id: "solo1" })} index={1} columnId="in_progress" />
+					</TooltipProvider>,
+				);
+			});
+
+			expect(container.querySelectorAll("button[data-reference-state]")).toHaveLength(0);
+			expect(container.textContent).toContain("solo1");
+		});
 	});
 });

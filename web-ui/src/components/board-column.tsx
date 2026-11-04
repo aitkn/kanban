@@ -3,6 +3,7 @@ import { Play, Plus, Trash2 } from "lucide-react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 
 import { BoardCard } from "@/components/board-card";
+import type { TaskReferences } from "@/components/dependencies/use-task-reference-navigation";
 import { Button } from "@/components/ui/button";
 import { ColumnIndicator } from "@/components/ui/column-indicator";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
@@ -38,6 +39,7 @@ export function BoardColumn({
 	dependencyTargetTaskId,
 	isDependencyLinking,
 	pendingPrerequisiteCountByTaskId,
+	taskReferences,
 	workspacePath,
 	defaultClineModelId,
 }: {
@@ -69,6 +71,7 @@ export function BoardColumn({
 	dependencyTargetTaskId?: string | null;
 	isDependencyLinking?: boolean;
 	pendingPrerequisiteCountByTaskId?: Record<string, number>;
+	taskReferences?: TaskReferences;
 	workspacePath?: string | null;
 	defaultClineModelId?: string | null;
 }): React.ReactElement {
@@ -189,6 +192,7 @@ export function BoardColumn({
 											isDependencyTarget={dependencyTargetTaskId === card.id}
 											isDependencyLinking={isDependencyLinking}
 											pendingPrerequisiteCount={pendingPrerequisiteCountByTaskId?.[card.id] ?? 0}
+											taskReferences={taskReferences}
 											workspacePath={workspacePath}
 											defaultClineModelId={defaultClineModelId}
 											onSaveTitle={onSaveTitle}
