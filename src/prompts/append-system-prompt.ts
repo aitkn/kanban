@@ -306,7 +306,7 @@ Parameters:
 - \`--dependency-id <dependency_id>\` dependency ID of a live same-board link. Use \`task list\` to inspect existing links.
 - \`--task-id <task_id> --linked-task-id <task_id>\` removes \`--linked-task-id\` from \`--task-id\`'s \`dependsOn\`, plus any live link through which it waits on it. Use this form for a \`dependsOn\` entry whose live link is already gone.
 - Adding \`--linked-project-path\` or \`--linked-project-id\` removes a cross-project link instead, as in \`task link\`. \`--linked-project-id\` is the \`projectId\` shown in \`task list\`'s \`dependsOn\`; it also works after that project was removed from Kanban.
-- \`--project-path <path>\` optional workspace path. With \`--dependency-id\`, an unregistered git repo is auto-added; the cross-project form requires it to be added already.
+- \`--project-path <path>\` optional workspace path. For a same-board link an unregistered git repo is auto-added; the cross-project form requires it to be added already.
 
 ## project list
 
@@ -327,7 +327,7 @@ Command:
 
 Notes:
 - A short name uses lowercase letters, digits, \`-\` and \`_\`, and must be unique across projects.
-- Without a short name a project shows its ID minus the prefix (ending in \`-\` or \`_\`) that every project ID shares.
+- Without a short name a project shows its ID minus the prefix (ending in \`-\` or \`_\`) that every project ID shares, when there are two or more projects.
 - Only set a short name when the user asks for one.
 
 ## task start

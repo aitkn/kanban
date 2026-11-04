@@ -51,9 +51,13 @@ function longestCommonPrefix(values: readonly string[]): string {
 /**
  * The longest prefix shared by every ID that ends with a separator, so it is removed only at a
  * word boundary: `skedai-web` and `skedai-db` share `skedai-`, while `sked-ai` and `skedai-web`
- * share `sked`, which ends at no separator, so nothing is removed.
+ * share `sked`, which ends at no separator, so nothing is removed. A prefix takes at least two
+ * projects: a lone project keeps its full ID, so its name does not change when a second is added.
  */
 export function getSharedProjectIdPrefix(workspaceIds: readonly string[]): string {
+	if (workspaceIds.length < 2) {
+		return "";
+	}
 	const prefix = longestCommonPrefix(workspaceIds);
 	for (let index = prefix.length - 1; index >= 0; index -= 1) {
 		if (SEPARATORS.has(prefix[index] ?? "")) {
@@ -63,41 +67,43 @@ export function getSharedProjectIdPrefix(workspaceIds: readonly string[]): strin
 	return "";
 }
 
+function countBy(values: Iterable<string>): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const value of values) {
+		counts.set(value, (counts.get(value) ?? 0) + 1);
+	}
+	return counts;
+}
+
 /**
- * The short name each project is displayed with. A name the user set wins. Otherwise the
- * workspace ID minus the shared prefix; when that is empty, or taken by another project, the
- * full workspace ID. Two projects carrying the same set name (a hand-edited index) both fall
- * back to their workspace IDs.
+ * The short name each project is displayed with; no two projects get the same one. A name the
+ * user set wins, otherwise the workspace ID minus the shared prefix. Either falls back to the
+ * project's full workspace ID when it is empty, shared with another project's name, or another
+ * project's workspace ID. That last case arises when a project is added whose ID equals a short
+ * name set earlier: IDs cannot change, so the set name gives way.
  */
 export function resolveProjectShortNames(projects: readonly ProjectShortNameSource[]): Map<string, string> {
-	const prefix = getSharedProjectIdPrefix(projects.map((project) => project.workspaceId));
-	const countByExplicitName = new Map<string, number>();
-	for (const project of projects) {
-		if (project.shortName) {
-			countByExplicitName.set(project.shortName, (countByExplicitName.get(project.shortName) ?? 0) + 1);
-		}
-	}
-	const derivedByWorkspaceId = new Map<string, string>();
-	const countByDerivedName = new Map<string, number>();
-	for (const project of projects) {
-		if (project.shortName) {
-			continue;
-		}
-		const derived = project.workspaceId.slice(prefix.length);
-		derivedByWorkspaceId.set(project.workspaceId, derived);
-		countByDerivedName.set(derived, (countByDerivedName.get(derived) ?? 0) + 1);
-	}
+	const workspaceIds = new Set(projects.map((project) => project.workspaceId));
+	const prefix = getSharedProjectIdPrefix([...workspaceIds]);
+	const isAnotherProjectsId = (name: string, workspaceId: string) => name !== workspaceId && workspaceIds.has(name);
+
+	const explicitCounts = countBy(projects.flatMap((project) => (project.shortName ? [project.shortName] : [])));
+	const derivedByWorkspaceId = new Map(
+		projects.flatMap((project) =>
+			project.shortName ? [] : [[project.workspaceId, project.workspaceId.slice(prefix.length)] as const],
+		),
+	);
+	const derivedCounts = countBy(derivedByWorkspaceId.values());
 
 	const resolved = new Map<string, string>();
 	for (const project of projects) {
-		if (project.shortName) {
-			const unique = countByExplicitName.get(project.shortName) === 1;
-			resolved.set(project.workspaceId, unique ? project.shortName : project.workspaceId);
-			continue;
-		}
-		const derived = derivedByWorkspaceId.get(project.workspaceId) ?? "";
-		const usable = derived.length > 0 && countByDerivedName.get(derived) === 1 && !countByExplicitName.has(derived);
-		resolved.set(project.workspaceId, usable ? derived : project.workspaceId);
+		const { workspaceId, shortName } = project;
+		const candidate = shortName ?? derivedByWorkspaceId.get(workspaceId) ?? "";
+		const unique = shortName
+			? explicitCounts.get(shortName) === 1
+			: derivedCounts.get(candidate) === 1 && !explicitCounts.has(candidate);
+		const usable = candidate.length > 0 && unique && !isAnotherProjectsId(candidate, workspaceId);
+		resolved.set(workspaceId, usable ? candidate : workspaceId);
 	}
 	return resolved;
 }

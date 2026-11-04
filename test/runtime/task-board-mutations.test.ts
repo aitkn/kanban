@@ -859,6 +859,25 @@ describe("dependsOn (sked fork: persistent prerequisite record)", () => {
 			expect(dependsOnOf(unlinked, "waiting")).toEqual([]);
 		});
 
+		it("removes a flipped link named the way task list shows it, with the other card's entry", () => {
+			let board = link(
+				boardWithTasks([
+					["waiting", "backlog"],
+					["prereq", "backlog"],
+				]),
+				"waiting",
+				"prereq",
+			);
+			board = moveTaskToColumn(board, "waiting", "in_progress").board;
+			// task list now shows prereq waiting on waiting.
+
+			const unlinked = removed(removeTaskPrerequisite(board, "prereq", "waiting"));
+
+			expect(unlinked.dependencies).toEqual([]);
+			expect(dependsOnOf(unlinked, "waiting")).toEqual([]);
+			expect(dependsOnOf(unlinked, "prereq")).toEqual([]);
+		});
+
 		it("keeps a link in which the other card waits on this one", () => {
 			const board = link(
 				boardWithTasks([

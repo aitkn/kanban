@@ -586,7 +586,9 @@ export type RuntimeRemoveTaskPrerequisiteResult =
  * gone (the prerequisite finished, or the waiting card started). Removes `prerequisiteTaskId` from the
  * waiting card's `dependsOn` and any live link through which it waits on it, including that link
  * flipped (see `recordLinkedPrerequisites`). A link in which the other card waits on this one, recorded
- * on the other card, is a different link and is kept.
+ * on the other card, is a different link and is kept. Called with the two IDs of a flipped link the
+ * way `task list` now shows it (the card that started second), it removes that link and, as
+ * `removeTaskDependency` does, the entry the other card recorded for it.
  */
 export function removeTaskPrerequisite(
 	board: RuntimeBoardData,
@@ -605,12 +607,18 @@ export function removeTaskPrerequisite(
 				(flippedLinkIsOurs && dependency.fromTaskId === prerequisiteTaskId && dependency.toTaskId === waitingTaskId)
 			),
 	);
-	if (!recorded && dependencies.length === board.dependencies.length) {
+	const removedLiveLink = dependencies.length !== board.dependencies.length;
+	if (!recorded && !removedLiveLink) {
 		return { removed: false, reason: "not_linked" };
 	}
+	const removedLinkFlippedFromOtherCard =
+		removedLiveLink && !recorded && hasRecordedPrerequisite(board, prerequisiteTaskId, waitingTaskId);
+	const withoutOwnEntry = forgetTaskPrerequisite({ ...board, dependencies }, waitingTaskId, prerequisiteTaskId);
 	return {
 		removed: true,
-		board: forgetTaskPrerequisite({ ...board, dependencies }, waitingTaskId, prerequisiteTaskId),
+		board: removedLinkFlippedFromOtherCard
+			? forgetTaskPrerequisite(withoutOwnEntry, prerequisiteTaskId, waitingTaskId)
+			: withoutOwnEntry,
 	};
 }
 

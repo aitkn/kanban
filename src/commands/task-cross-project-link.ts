@@ -60,10 +60,25 @@ function trimmed(value: string | undefined): string | undefined {
 	return result ? result : undefined;
 }
 
+/**
+ * An option that was not passed is undefined; one passed empty (a script variable that expanded to
+ * nothing) is refused, so `--linked-project-id ""` cannot quietly become a same-board link.
+ */
+function optionValue(value: string | undefined, flag: string): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	const result = value.trim();
+	if (!result) {
+		throw new Error(`${flag} cannot be empty.`);
+	}
+	return result;
+}
+
 /** Returns null when neither option was passed (a same-board link). */
 export function parseLinkedProjectSelector(options: LinkedProjectOptions): LinkedProjectSelector | null {
-	const path = trimmed(options.linkedProjectPath);
-	const workspaceId = trimmed(options.linkedProjectId);
+	const path = optionValue(options.linkedProjectPath, "--linked-project-path");
+	const workspaceId = optionValue(options.linkedProjectId, "--linked-project-id");
 	if (path && workspaceId) {
 		throw new Error("Pass only one of --linked-project-path or --linked-project-id.");
 	}
@@ -77,9 +92,9 @@ export function parseLinkedProjectSelector(options: LinkedProjectOptions): Linke
 }
 
 export function parseTaskUnlinkTarget(options: TaskUnlinkOptions): TaskUnlinkTarget {
-	const dependencyId = trimmed(options.dependencyId);
-	const taskId = trimmed(options.taskId);
-	const linkedTaskId = trimmed(options.linkedTaskId);
+	const dependencyId = optionValue(options.dependencyId, "--dependency-id");
+	const taskId = optionValue(options.taskId, "--task-id");
+	const linkedTaskId = optionValue(options.linkedTaskId, "--linked-task-id");
 	const linkedProject = parseLinkedProjectSelector(options);
 	if (dependencyId) {
 		if (taskId || linkedTaskId || linkedProject) {

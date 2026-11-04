@@ -77,6 +77,11 @@ describe("sked fork: project short names", () => {
 		it("returns nothing for no projects", () => {
 			expect(resolve([])).toEqual({});
 		});
+
+		it("keeps a lone project's full ID, so adding a second project does not rename it", () => {
+			expect(getSharedProjectIdPrefix(["skedai-web"])).toBe("");
+			expect(resolve([{ workspaceId: "skedai-web" }])).toEqual({ "skedai-web": "skedai-web" });
+		});
 	});
 
 	describe("set short names", () => {
@@ -98,6 +103,33 @@ describe("sked fork: project short names", () => {
 					{ workspaceId: "skedai-llm", shortName: "web" },
 				]),
 			).toEqual({ "skedai-web": "skedai-web", "skedai-db": "db", "skedai-llm": "web" });
+		});
+
+		it("gives a set short name up to a project added later whose ID equals it", () => {
+			// Project "web" was registered after "skedai-db" was named "web".
+			expect(
+				resolve([{ workspaceId: "skedai-db", shortName: "web" }, { workspaceId: "web" }, { workspaceId: "xtil" }]),
+			).toEqual({ "skedai-db": "skedai-db", web: "web", xtil: "xtil" });
+		});
+
+		it("never derives another project's ID", () => {
+			// Prefix "p-": "p-p-a" would derive "p-a", which is another project's ID.
+			expect(
+				resolve([{ workspaceId: "p-a" }, { workspaceId: "p-p-a" }, { workspaceId: "p-z", shortName: "a" }]),
+			).toEqual({ "p-a": "p-a", "p-p-a": "p-p-a", "p-z": "a" });
+		});
+
+		it("never shows two projects under one name", () => {
+			const cases = [
+				[{ workspaceId: "skedai-db", shortName: "web" }, { workspaceId: "web" }],
+				[{ workspaceId: "p-a" }, { workspaceId: "p-p-a" }, { workspaceId: "p-z", shortName: "a" }],
+				[{ workspaceId: "a-b" }, { workspaceId: "a-c", shortName: "b" }, { workspaceId: "b" }],
+				[{ workspaceId: "x-1", shortName: "x-2" }, { workspaceId: "x-2" }, { workspaceId: "x-3", shortName: "2" }],
+			];
+			for (const projects of cases) {
+				const names = [...resolveProjectShortNames(projects).values()];
+				expect(new Set(names).size).toBe(names.length);
+			}
 		});
 
 		it("falls back to the full IDs when two projects carry the same set short name", () => {

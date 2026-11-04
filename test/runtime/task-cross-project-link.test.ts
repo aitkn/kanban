@@ -107,7 +107,6 @@ describe("sked fork: cross-project prerequisites", () => {
 describe("sked fork: task link/unlink option parsing", () => {
 	it("reads the linked project from a path or an ID, not both", () => {
 		expect(parseLinkedProjectSelector({})).toBeNull();
-		expect(parseLinkedProjectSelector({ linkedProjectPath: "  " })).toBeNull();
 		expect(parseLinkedProjectSelector({ linkedProjectPath: "../db" })).toEqual({ kind: "path", path: "../db" });
 		expect(parseLinkedProjectSelector({ linkedProjectId: "skedai-db" })).toEqual({
 			kind: "id",
@@ -116,6 +115,17 @@ describe("sked fork: task link/unlink option parsing", () => {
 		expect(() => parseLinkedProjectSelector({ linkedProjectPath: "../db", linkedProjectId: "skedai-db" })).toThrow(
 			"only one of",
 		);
+	});
+
+	it("refuses an option passed empty instead of treating it as absent", () => {
+		expect(() => parseLinkedProjectSelector({ linkedProjectId: "" })).toThrow("--linked-project-id cannot be empty.");
+		expect(() => parseLinkedProjectSelector({ linkedProjectPath: "  " })).toThrow(
+			"--linked-project-path cannot be empty.",
+		);
+		expect(() => parseTaskUnlinkTarget({ taskId: "a", linkedTaskId: "b", linkedProjectId: "" })).toThrow(
+			"--linked-project-id cannot be empty.",
+		);
+		expect(() => parseTaskUnlinkTarget({ dependencyId: "" })).toThrow("--dependency-id cannot be empty.");
 	});
 
 	it("unlinks a same-board link by dependency ID alone", () => {

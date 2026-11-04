@@ -105,8 +105,9 @@ export function registerProjectCommand(program: Command): void {
 			[
 				"",
 				"Default short name: the project ID without the prefix (ending in '-' or '_') that",
-				"every project ID shares; the full ID when no such prefix exists or the result",
-				"would be empty or taken.",
+				"every project ID shares, when there are two or more projects; otherwise, or when",
+				"the result would be empty or taken, the full ID. A set name equal to the ID of a",
+				"project added later stops being used, and its project shows its full ID instead.",
 				"",
 			].join("\n"),
 		)

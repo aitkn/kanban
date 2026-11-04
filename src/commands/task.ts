@@ -351,12 +351,17 @@ function findTaskRecord(
 	return null;
 }
 
+// sked fork: every task record shows cross-project refs with the same short names as `task list`.
+async function loadProjectShortNames(): Promise<Map<string, string>> {
+	return resolveProjectShortNames(await listWorkspaceIndexEntries());
+}
+
 function formatTaskRecord(
 	state: RuntimeWorkspaceStateResponse,
 	task: RuntimeBoardCard,
 	columnId: RuntimeBoardColumnId,
-	// sked fork: project short names for displaying cross-project refs; without them a ref shows its project ID.
-	projectShortNames: ReadonlyMap<string, string> = new Map(),
+	// sked fork: project short names, for each dependsOn entry's `ref` (`db#c64f9`).
+	projectShortNames: ReadonlyMap<string, string>,
 ): JsonRecord {
 	const session = state.sessions[task.id] ?? null;
 	return {
@@ -439,7 +444,7 @@ async function listTasks(input: { cwd: string; projectPath?: string; column?: Li
 	});
 	const runtimeClient = createRuntimeTrpcClient(workspace.workspaceId);
 	const state = await runtimeClient.workspace.getState.query();
-	const projectShortNames = resolveProjectShortNames(await listWorkspaceIndexEntries());
+	const projectShortNames = await loadProjectShortNames();
 
 	const tasks = state.board.columns.flatMap((boardColumn) => {
 		if (!input.column && boardColumn.id === "trash") {
@@ -566,6 +571,7 @@ async function updateTaskCommand(input: {
 	clineModelId?: string | null;
 	clineReasoningEffort?: ParsedTaskClineReasoningEffort;
 }): Promise<JsonRecord> {
+	const projectShortNames = await loadProjectShortNames();
 	if (
 		input.title === undefined &&
 		input.prompt === undefined &&
@@ -616,7 +622,7 @@ async function updateTaskCommand(input: {
 
 		return {
 			board: updatedTask.board,
-			value: formatTaskRecord(nextState, updatedTask.task, taskRecord.columnId),
+			value: formatTaskRecord(nextState, updatedTask.task, taskRecord.columnId, projectShortNames),
 		};
 	});
 
@@ -715,8 +721,7 @@ async function unlinkTaskPrerequisite(input: {
 	return {
 		ok: true,
 		workspacePath: workspaceRepoPath,
-		taskId: input.taskId,
-		removedDependsOn: { taskId: input.linkedTaskId },
+		unlinked: { taskId: input.taskId, linkedTaskId: input.linkedTaskId },
 	};
 }
 
@@ -838,6 +843,7 @@ async function trashTaskById(input: {
 	workspaceRepoPath: string;
 	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>;
 }): Promise<TrashTaskExecutionResult> {
+	const projectShortNames = await loadProjectShortNames();
 	const mutation = await mutateWorkspaceState<TrashTaskMutationValue>(input.workspaceRepoPath, (latestState) => {
 		const latestRecord = findTaskRecord(latestState, input.taskId);
 		if (!latestRecord) {
@@ -847,7 +853,7 @@ async function trashTaskById(input: {
 			return {
 				board: latestState.board,
 				value: {
-					task: formatTaskRecord(latestState, latestRecord.task, latestRecord.columnId),
+					task: formatTaskRecord(latestState, latestRecord.task, latestRecord.columnId, projectShortNames),
 					previousColumnId: latestRecord.columnId,
 					readyTaskIds: [] as string[],
 					alreadyInTrash: true,
@@ -868,7 +874,7 @@ async function trashTaskById(input: {
 		return {
 			board: trashed.board,
 			value: {
-				task: formatTaskRecord(nextState, trashed.task, "trash"),
+				task: formatTaskRecord(nextState, trashed.task, "trash", projectShortNames),
 				previousColumnId: latestRecord.columnId,
 				readyTaskIds: trashed.readyTaskIds,
 				alreadyInTrash: false,
@@ -1015,6 +1021,7 @@ async function deleteTaskCommand(input: {
 	column?: ListTaskColumn;
 	projectPath?: string;
 }): Promise<JsonRecord> {
+	const projectShortNames = await loadProjectShortNames();
 	const target = resolveTaskCommandTarget(input, "task delete");
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
@@ -1060,7 +1067,7 @@ async function deleteTaskCommand(input: {
 		}
 
 		const deletedTasks = latestTargetRecords.map(({ task, columnId }) =>
-			formatTaskRecord(latestState, task, columnId),
+			formatTaskRecord(latestState, task, columnId, projectShortNames),
 		);
 		const taskIdsRequiringStop = latestTargetRecords
 			.filter(({ columnId }) => columnCanHaveLiveTaskSession(columnId))
