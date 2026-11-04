@@ -17,6 +17,7 @@ import {
 	runtimeWorkspaceStateSaveRequestSchema,
 } from "../core/api-contract";
 import { createGitProcessEnv } from "../core/git-process-env";
+import { validateProjectShortName } from "../core/project-short-name";
 import { recordLinkedPrerequisites, updateTaskDependencies } from "../core/task-board-mutations";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 
@@ -41,11 +42,15 @@ const BOARD_COLUMNS: Array<{ id: RuntimeBoardColumnId; title: string }> = [
 interface WorkspaceIndexEntry {
 	workspaceId: string;
 	repoPath: string;
+	// sked fork: optional; absent on entries written before short names existed.
+	shortName?: string;
 }
 
 export interface RuntimeWorkspaceIndexEntry {
 	workspaceId: string;
 	repoPath: string;
+	/** sked fork: the short name the user set; absent means the derived default is used. */
+	shortName?: string;
 }
 
 interface WorkspaceIndexFile {
@@ -67,6 +72,9 @@ const workspaceStateMetaSchema = z.object({
 const workspaceIndexEntrySchema = z.object({
 	workspaceId: z.string().min(1, "Workspace ID cannot be empty."),
 	repoPath: z.string().min(1, "Workspace repository path cannot be empty."),
+	// sked fork: not validated here, so a hand-edited value cannot make the whole index unreadable;
+	// `setWorkspaceShortName` validates what Kanban writes.
+	shortName: z.string().optional(),
 });
 
 const workspaceIndexFileSchema = z
@@ -609,8 +617,52 @@ export async function listWorkspaceIndexEntries(): Promise<RuntimeWorkspaceIndex
 		.map((entry) => ({
 			workspaceId: entry.workspaceId,
 			repoPath: entry.repoPath,
+			...(entry.shortName ? { shortName: entry.shortName } : {}),
 		}))
 		.sort((left, right) => left.repoPath.localeCompare(right.repoPath));
+}
+
+/**
+ * sked fork: set (or, with null, clear) the short name a project is displayed with in
+ * cross-project references. A short name must be valid and must not be another project's
+ * short name or workspace ID. Returns the updated entry.
+ */
+export async function setWorkspaceShortName(
+	workspaceId: string,
+	shortName: string | null,
+): Promise<RuntimeWorkspaceIndexEntry> {
+	if (shortName !== null) {
+		const invalid = validateProjectShortName(shortName);
+		if (invalid) {
+			throw new Error(invalid);
+		}
+	}
+	return await lockedFileSystem.withLock(getWorkspaceIndexLockRequest(), async () => {
+		const index = await readWorkspaceIndex();
+		const entry = index.entries[workspaceId];
+		if (!entry) {
+			throw new Error(`Project "${workspaceId}" is not added to Kanban.`);
+		}
+		if (shortName !== null) {
+			const clash = Object.values(index.entries).find(
+				(other) =>
+					other.workspaceId !== workspaceId && (other.shortName === shortName || other.workspaceId === shortName),
+			);
+			if (clash) {
+				throw new Error(
+					clash.shortName === shortName
+						? `Short name "${shortName}" is already used by project "${clash.workspaceId}".`
+						: `Short name "${shortName}" is the ID of another project.`,
+				);
+			}
+		}
+		const { shortName: _previous, ...rest } = entry;
+		const nextEntry: WorkspaceIndexEntry = shortName === null ? rest : { ...rest, shortName };
+		if (nextEntry.shortName !== entry.shortName) {
+			await writeWorkspaceIndex({ ...index, entries: { ...index.entries, [workspaceId]: nextEntry } });
+		}
+		return { ...nextEntry };
+	});
 }
 
 export async function removeWorkspaceIndexEntry(workspaceId: string): Promise<boolean> {

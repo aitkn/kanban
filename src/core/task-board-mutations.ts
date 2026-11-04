@@ -250,6 +250,74 @@ export function forgetTaskPrerequisite(
 	);
 }
 
+/** sked fork: a prerequisite on another project's board. */
+export interface CrossProjectTaskRef {
+	taskId: string;
+	projectId: string;
+}
+
+export type RuntimeCrossProjectLinkResult =
+	| { added: true; board: RuntimeBoardData }
+	| { added: false; reason: "missing_task" | "trash_task" | "duplicate" };
+
+export type RuntimeCrossProjectUnlinkResult =
+	| { removed: true; board: RuntimeBoardData }
+	| { removed: false; reason: "missing_task" | "not_linked" };
+
+function isCrossProjectRef(ref: RuntimeTaskDependsOnRef, target: CrossProjectTaskRef): boolean {
+	return ref.taskId === target.taskId && ref.projectId === target.projectId;
+}
+
+/**
+ * sked fork: record that `waitingTaskId` depends on a task on another project's board. The ref is
+ * display-only: it never enters `board.dependencies`, so it starts nothing. The caller checks that
+ * the other project and its task exist; boards cannot see each other.
+ */
+export function addCrossProjectPrerequisite(
+	board: RuntimeBoardData,
+	waitingTaskId: string,
+	prerequisite: CrossProjectTaskRef,
+): RuntimeCrossProjectLinkResult {
+	const found = findTaskLocation(board, waitingTaskId);
+	if (!found) {
+		return { added: false, reason: "missing_task" };
+	}
+	if (found.columnId === "trash") {
+		return { added: false, reason: "trash_task" };
+	}
+	if ((found.task.dependsOn ?? []).some((ref) => isCrossProjectRef(ref, prerequisite))) {
+		return { added: false, reason: "duplicate" };
+	}
+	return {
+		added: true,
+		board: updateCardDependsOn(board, waitingTaskId, (dependsOn) => [
+			...dependsOn,
+			{ taskId: prerequisite.taskId, projectId: prerequisite.projectId },
+		]),
+	};
+}
+
+/** sked fork: drop a cross-project prerequisite from the waiting card's `dependsOn`. */
+export function removeCrossProjectPrerequisite(
+	board: RuntimeBoardData,
+	waitingTaskId: string,
+	prerequisite: CrossProjectTaskRef,
+): RuntimeCrossProjectUnlinkResult {
+	const found = findTaskLocation(board, waitingTaskId);
+	if (!found) {
+		return { removed: false, reason: "missing_task" };
+	}
+	if (!(found.task.dependsOn ?? []).some((ref) => isCrossProjectRef(ref, prerequisite))) {
+		return { removed: false, reason: "not_linked" };
+	}
+	return {
+		removed: true,
+		board: updateCardDependsOn(board, waitingTaskId, (dependsOn) =>
+			dependsOn.filter((ref) => !isCrossProjectRef(ref, prerequisite)),
+		),
+	};
+}
+
 function resolveDependencyEndpoints(
 	board: RuntimeBoardData,
 	firstTaskId: string,
@@ -506,6 +574,43 @@ export function removeTaskDependency(board: RuntimeBoardData, dependencyId: stri
 			? forgetTaskPrerequisite(boardWithoutLink, fromTaskId, toTaskId)
 			: forgetTaskPrerequisite(boardWithoutLink, toTaskId, fromTaskId),
 		removed: true,
+	};
+}
+
+export type RuntimeRemoveTaskPrerequisiteResult =
+	| { removed: true; board: RuntimeBoardData }
+	| { removed: false; reason: "missing_task" | "not_linked" };
+
+/**
+ * sked fork: unlink by the two task IDs, so a `dependsOn` entry can be removed after its live link is
+ * gone (the prerequisite finished, or the waiting card started). Removes `prerequisiteTaskId` from the
+ * waiting card's `dependsOn` and any live link through which it waits on it, including that link
+ * flipped (see `recordLinkedPrerequisites`). A link in which the other card waits on this one, recorded
+ * on the other card, is a different link and is kept.
+ */
+export function removeTaskPrerequisite(
+	board: RuntimeBoardData,
+	waitingTaskId: string,
+	prerequisiteTaskId: string,
+): RuntimeRemoveTaskPrerequisiteResult {
+	if (!findTaskLocation(board, waitingTaskId)) {
+		return { removed: false, reason: "missing_task" };
+	}
+	const recorded = hasRecordedPrerequisite(board, waitingTaskId, prerequisiteTaskId);
+	const flippedLinkIsOurs = recorded && !hasRecordedPrerequisite(board, prerequisiteTaskId, waitingTaskId);
+	const dependencies = board.dependencies.filter(
+		(dependency) =>
+			!(
+				(dependency.fromTaskId === waitingTaskId && dependency.toTaskId === prerequisiteTaskId) ||
+				(flippedLinkIsOurs && dependency.fromTaskId === prerequisiteTaskId && dependency.toTaskId === waitingTaskId)
+			),
+	);
+	if (!recorded && dependencies.length === board.dependencies.length) {
+		return { removed: false, reason: "not_linked" };
+	}
+	return {
+		removed: true,
+		board: forgetTaskPrerequisite({ ...board, dependencies }, waitingTaskId, prerequisiteTaskId),
 	};
 }
 
