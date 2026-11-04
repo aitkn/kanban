@@ -1,6 +1,6 @@
 import { Link2 } from "lucide-react";
-import type { MouseEvent } from "react";
 
+import { stopEvent } from "@/components/dependencies/stop-event";
 import type { TaskReferences } from "@/components/dependencies/use-task-reference-navigation";
 import { cn } from "@/components/ui/cn";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -15,11 +15,6 @@ const CHIP_CLASS_BY_COLUMN: Record<BoardColumnId, string> = {
 };
 
 const DELETED_CHIP_CLASS = "border-border bg-surface-1 text-text-tertiary line-through";
-
-function stopEvent(event: MouseEvent<HTMLElement>): void {
-	event.preventDefault();
-	event.stopPropagation();
-}
 
 /**
  * sked fork: the cards this card was linked to, kept after the live link is gone.

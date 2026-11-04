@@ -213,16 +213,28 @@ export function recordTaskPrerequisite(
 	);
 }
 
+function hasRecordedPrerequisite(board: RuntimeBoardData, waitingTaskId: string, prerequisiteTaskId: string): boolean {
+	const found = findTaskLocation(board, waitingTaskId);
+	return (found?.task.dependsOn ?? []).some((ref) => isSameProjectRef(ref, prerequisiteTaskId));
+}
+
 /**
- * sked fork: record every live link on its waiting card. Links created before `dependsOn` existed
- * were never recorded, and linking the pair again is refused as a duplicate, so the board is
- * backfilled when it is read. Returns the same board when every link is already recorded.
+ * sked fork: record live links that neither card has recorded yet. Links created before `dependsOn`
+ * existed were never recorded, and linking the pair again is refused as a duplicate, so the board is
+ * backfilled when it is read. A link recorded on either card is skipped: `updateTaskDependencies`
+ * flips a link when its waiting card leaves backlog while the prerequisite is still there, and the
+ * flipped link must not be recorded the other way round. Returns the same board when nothing changed.
  */
 export function recordLinkedPrerequisites(board: RuntimeBoardData): RuntimeBoardData {
-	return board.dependencies.reduce(
-		(current, dependency) => recordTaskPrerequisite(current, dependency.fromTaskId, dependency.toTaskId),
-		board,
-	);
+	return board.dependencies.reduce((current, dependency) => {
+		if (
+			hasRecordedPrerequisite(current, dependency.fromTaskId, dependency.toTaskId) ||
+			hasRecordedPrerequisite(current, dependency.toTaskId, dependency.fromTaskId)
+		) {
+			return current;
+		}
+		return recordTaskPrerequisite(current, dependency.fromTaskId, dependency.toTaskId);
+	}, board);
 }
 
 /** sked fork: drop a same-project prerequisite from the waiting card's `dependsOn` (an explicit unlink). */
@@ -485,16 +497,14 @@ export function removeTaskDependency(board: RuntimeBoardData, dependencyId: stri
 		return { board, removed: false };
 	}
 	const dependencies = board.dependencies.filter((dependency) => dependency.id !== dependencyId);
+	const { fromTaskId, toTaskId } = removedDependency;
+	// sked fork: an explicit unlink also forgets the prerequisite on the waiting card. The link may have
+	// been flipped since it was recorded (see recordLinkedPrerequisites), so try the other card too.
+	const boardWithoutLink = { ...board, dependencies };
 	return {
-		// sked fork: an explicit unlink also forgets the prerequisite on the waiting card.
-		board: forgetTaskPrerequisite(
-			{
-				...board,
-				dependencies,
-			},
-			removedDependency.fromTaskId,
-			removedDependency.toTaskId,
-		),
+		board: hasRecordedPrerequisite(boardWithoutLink, fromTaskId, toTaskId)
+			? forgetTaskPrerequisite(boardWithoutLink, fromTaskId, toTaskId)
+			: forgetTaskPrerequisite(boardWithoutLink, toTaskId, fromTaskId),
 		removed: true,
 	};
 }

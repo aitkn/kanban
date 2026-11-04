@@ -15,6 +15,8 @@ let mockMeasureCallCount = 0;
 
 const mockShowAppToast = vi.hoisted(() => vi.fn());
 const mockCopyToClipboard = vi.hoisted(() => vi.fn());
+type MockCopyState = { value?: string; error?: Error; noUserInteraction: boolean };
+let mockCopyState: MockCopyState = { noUserInteraction: true };
 
 vi.mock("@/components/app-toaster", () => ({
 	showAppToast: mockShowAppToast,
@@ -43,7 +45,7 @@ vi.mock("@/stores/workspace-metadata-store", () => ({
 
 vi.mock("@/utils/react-use", () => ({
 	useMedia: () => false,
-	useCopyToClipboard: () => [{ value: undefined, error: undefined, noUserInteraction: true }, mockCopyToClipboard],
+	useCopyToClipboard: () => [mockCopyState, mockCopyToClipboard],
 	useMeasure: () => {
 		mockMeasureCallCount += 1;
 		const width = mockMeasureWidths[(mockMeasureCallCount - 1) % mockMeasureWidths.length] ?? 240;
@@ -155,6 +157,7 @@ describe("BoardCard", () => {
 	beforeEach(() => {
 		mockShowAppToast.mockReset();
 		mockCopyToClipboard.mockReset();
+		mockCopyState = { noUserInteraction: true };
 		mockWorkspaceSnapshot = undefined;
 		mockMeasureWidths = [240, 240, 240];
 		mockMeasureCallCount = 0;
@@ -894,6 +897,30 @@ describe("BoardCard", () => {
 			expect(handlers.onCardClick).not.toHaveBeenCalled();
 		});
 
+		it("confirms a copy only when it succeeded", async () => {
+			const renderBadge = async () => {
+				await act(async () => {
+					root.render(<BoardCard card={waitingCard} index={0} columnId="in_progress" />);
+				});
+			};
+			await renderBadge();
+			expect(mockShowAppToast).not.toHaveBeenCalled();
+
+			mockCopyState = { value: "wait1", noUserInteraction: true };
+			await renderBadge();
+			expect(mockShowAppToast).toHaveBeenLastCalledWith(
+				expect.objectContaining({ intent: "success", message: "Copied wait1" }),
+			);
+
+			// The browser blocked the copy and react-use fell back to a manual-copy prompt.
+			mockCopyState = { value: "wait1", noUserInteraction: false };
+			await renderBadge();
+			expect(mockShowAppToast).toHaveBeenLastCalledWith(
+				expect.objectContaining({ intent: "warning", message: "Could not copy wait1 automatically." }),
+			);
+			expect(mockShowAppToast).toHaveBeenCalledTimes(2);
+		});
+
 		it("colours each prerequisite chip by the referenced card's current column", async () => {
 			await renderChips();
 
@@ -925,6 +952,8 @@ describe("BoardCard", () => {
 			await press(chip("prog1"));
 			await press(chip("back1"));
 
+			// @hello-pangea/dnd never starts a drag from a <button>; that, not the mocked Draggable, is the guard.
+			expect(chip("revw1").tagName).toBe("BUTTON");
 			expect(mouseDown.defaultPrevented).toBe(true);
 			expect(handlers.onCardSelect.mock.calls).toEqual([["revw1"], ["prog1"]]);
 			expect(handlers.onEditTask).toHaveBeenCalledWith(expect.objectContaining({ id: "back1" }));

@@ -723,6 +723,66 @@ describe("dependsOn (sked fork: persistent prerequisite record)", () => {
 		expect(recordLinkedPrerequisites(backfilled)).toBe(backfilled);
 	});
 
+	describe("a link flipped by the waiting card starting while its prerequisite is in backlog", () => {
+		function flippedBoard(): RuntimeBoardData {
+			const linked = link(
+				boardWithTasks([
+					["waiting", "backlog"],
+					["prereq", "backlog"],
+				]),
+				"waiting",
+				"prereq",
+			);
+			const started = moveTaskToColumn(linked, "waiting", "in_progress").board;
+			// Unchanged upstream behaviour: the backlog card becomes the link's waiting side.
+			expect(started.dependencies).toEqual([expect.objectContaining({ fromTaskId: "prereq", toTaskId: "waiting" })]);
+			return started;
+		}
+
+		it("is not backfilled the other way round", () => {
+			const board = flippedBoard();
+
+			const backfilled = recordLinkedPrerequisites(board);
+
+			expect(backfilled).toBe(board);
+			expect(dependsOnOf(backfilled, "prereq")).toEqual([]);
+			expect(dependsOnOf(backfilled, "waiting")).toEqual([{ taskId: "prereq" }]);
+		});
+
+		it("is forgotten on the card that recorded it when unlinked", () => {
+			const board = flippedBoard();
+			const flipped = board.dependencies[0];
+			if (!flipped) {
+				throw new Error("Expected the flipped link.");
+			}
+
+			const unlinked = removeTaskDependency(board, flipped.id);
+
+			expect(unlinked.board.dependencies).toEqual([]);
+			expect(dependsOnOf(unlinked.board, "waiting")).toEqual([]);
+			expect(dependsOnOf(unlinked.board, "prereq")).toEqual([]);
+		});
+	});
+
+	it("backfills a pre-upgrade link even when one of its cards was linked after the upgrade", () => {
+		let board = boardWithTasks([
+			["old-waiting", "backlog"],
+			["shared", "review"],
+			["new-waiting", "backlog"],
+		]);
+		board = {
+			...board,
+			dependencies: [{ id: "legacy", fromTaskId: "old-waiting", toTaskId: "shared", createdAt: 1 }],
+		};
+		board = link(board, "new-waiting", "shared");
+
+		const backfilled = recordLinkedPrerequisites(board);
+
+		expect(dependsOnOf(backfilled, "old-waiting")).toEqual([{ taskId: "shared" }]);
+		expect(dependsOnOf(backfilled, "new-waiting")).toEqual([{ taskId: "shared" }]);
+		expect(dependsOnOf(backfilled, "shared")).toEqual([]);
+	});
+
 	it("round-trips through the board schema, and loads cards saved before the field existed", () => {
 		const board = link(
 			boardWithTasks([

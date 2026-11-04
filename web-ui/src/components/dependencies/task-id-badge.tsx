@@ -1,27 +1,25 @@
-import type { MouseEvent } from "react";
 import { useEffect } from "react";
 
 import { showAppToast } from "@/components/app-toaster";
+import { stopEvent } from "@/components/dependencies/stop-event";
 import { cn } from "@/components/ui/cn";
 import { useCopyToClipboard } from "@/utils/react-use";
-
-function stopEvent(event: MouseEvent<HTMLElement>): void {
-	event.preventDefault();
-	event.stopPropagation();
-}
 
 /** sked fork: the card's own id; clicking copies it without opening or dragging the card. */
 export function TaskIdBadge({ taskId, muted = false }: { taskId: string; muted?: boolean }): React.ReactElement {
 	const [copyState, copyToClipboard] = useCopyToClipboard();
 
 	useEffect(() => {
-		if (copyState.error) {
-			showAppToast({ intent: "warning", message: `Could not copy ${taskId}.`, timeout: 3000 });
+		if (copyState.value === undefined && !copyState.error) {
 			return;
 		}
-		if (copyState.value !== undefined) {
-			showAppToast({ intent: "success", message: `Copied ${copyState.value}`, timeout: 1500 });
+		// When the browser blocks copying, react-use falls back to a prompt for a manual copy and
+		// reports it only as `noUserInteraction: false`, so that case must not claim success.
+		if (copyState.error || !copyState.noUserInteraction) {
+			showAppToast({ intent: "warning", message: `Could not copy ${taskId} automatically.`, timeout: 3000 });
+			return;
 		}
+		showAppToast({ intent: "success", message: `Copied ${copyState.value}`, timeout: 1500 });
 	}, [copyState, taskId]);
 
 	return (
