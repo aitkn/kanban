@@ -221,6 +221,17 @@ describe("useCrossProjectTaskNavigation (sked fork)", () => {
 		expect(mockShowAppToast).not.toHaveBeenCalled();
 	});
 
+	it("pushes one history entry for repeated clicks while the jump is in flight", async () => {
+		await render({ currentProjectId: "web", board: webBoard });
+		const historyLength = window.history.length;
+
+		act(() => current().references.openProjectTask("db", "dbRevw"));
+		act(() => current().references.openProjectTask("db", "dbRevw"));
+
+		expect(window.history.length).toBe(historyLength + 1);
+		expect(handleSelectProject).toHaveBeenCalledTimes(1);
+	});
+
 	it("returns to the previous project and card on Back", async () => {
 		await render({ currentProjectId: "web", board: webBoard });
 		act(() => current().references.openProjectTask("db", "dbRevw"));
@@ -282,9 +293,12 @@ describe("useCrossProjectTaskNavigation (sked fork)", () => {
 	it("forgets the card when the switch is abandoned", async () => {
 		await render({ currentProjectId: "web", board: webBoard });
 		act(() => current().references.openProjectTask("db", "dbRevw"));
+		expect(location()).toBe("/db");
 		// The requested project vanished, so navigation fell back to the current one.
 		act(() => current().abandonSwitch());
 		await render({ currentProjectId: "web", board: webBoard });
+		// The address bar no longer names the project that could not be opened.
+		expect(location()).toBe("/web");
 
 		// A later visit to db from the project list must not open the card.
 		act(() => current().selectProject("db"));

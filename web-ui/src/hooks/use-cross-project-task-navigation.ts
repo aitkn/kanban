@@ -81,6 +81,10 @@ export function useCrossProjectTaskNavigation({
 
 	const openProjectTask = useCallback(
 		(projectId: string, taskId: string) => {
+			// A second click while a jump is in flight would push a second history entry.
+			if (pendingOpen) {
+				return;
+			}
 			const reference = resolveCrossProjectTaskReference(projects, projectId, taskId);
 			if (!reference.task) {
 				showDeletedTaskReferenceToast();
@@ -99,7 +103,7 @@ export function useCrossProjectTaskNavigation({
 			setPendingOpen({ projectId, taskId, source: "link" });
 			handleSelectProject(projectId);
 		},
-		[handleSelectProject, projects, setSelectedTaskId],
+		[handleSelectProject, pendingOpen, projects, setSelectedTaskId],
 	);
 
 	const handlePopState = useCallback(() => {
@@ -119,6 +123,11 @@ export function useCrossProjectTaskNavigation({
 			// The switch was abandoned (the project went away, or the user picked another one).
 			if (!isProjectSwitching && !isBoardLoading) {
 				setPendingOpen(null);
+				// A project that could not be opened leaves the URL on it, and the project URL
+				// effect only runs when the current project changes, which it did not.
+				if (currentProjectId && window.location.pathname === buildProjectPathname(pendingOpen.projectId)) {
+					window.history.replaceState(window.history.state, "", buildProjectPathname(currentProjectId));
+				}
 			}
 			return;
 		}

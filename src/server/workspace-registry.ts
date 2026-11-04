@@ -214,6 +214,9 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		activeWorkspaceId && activeWorkspacePath ? [[activeWorkspaceId, activeWorkspacePath]] : [],
 	);
 	const projectTaskCountsByWorkspaceId = new Map<string, RuntimeProjectTaskCounts>();
+	// sked fork: the last board read for each project, so one failed read does not show every
+	// cross-project chip into it as deleted (the task counts fall back to their cache the same way).
+	const lastReadBoardByWorkspaceId = new Map<string, RuntimeBoardData>();
 	const terminalManagersByWorkspaceId = new Map<string, TerminalSessionManager>();
 	const terminalManagerLoadPromises = new Map<string, Promise<TerminalSessionManager>>();
 
@@ -293,6 +296,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 			terminalManagerLoadPromises.delete(workspaceId);
 		}
 		projectTaskCountsByWorkspaceId.delete(workspaceId);
+		lastReadBoardByWorkspaceId.delete(workspaceId);
 		const workspacePath = workspacePathsById.get(workspaceId) ?? null;
 		workspacePathsById.delete(workspaceId);
 		return {
@@ -313,6 +317,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		const sessionsByTaskId = new Map<string, RuntimeTaskSessionSummary>();
 		try {
 			const board = await loadWorkspaceBoardById(workspaceId);
+			lastReadBoardByWorkspaceId.set(workspaceId, board);
 			const persistedCounts = countTasksByColumn(board);
 			const terminalManager = getTerminalManagerForWorkspace(workspaceId);
 			if (!terminalManager) {
@@ -330,7 +335,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		} catch {
 			return {
 				taskCounts: projectTaskCountsByWorkspaceId.get(workspaceId) ?? createEmptyProjectTaskCounts(),
-				board: null,
+				board: lastReadBoardByWorkspaceId.get(workspaceId) ?? null,
 				sessionsByTaskId,
 			};
 		}

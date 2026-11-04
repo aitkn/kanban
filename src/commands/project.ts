@@ -12,6 +12,7 @@ import {
 	type RuntimeWorkspaceIndexEntry,
 	setWorkspaceShortName,
 } from "../state/workspace-state";
+import { notifyRuntimeWorkspaceById } from "./task";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -54,13 +55,19 @@ async function resolveProjectId(options: ProjectShortNameOptions, cwd: string): 
 	return context.workspaceId;
 }
 
-export async function setProjectShortName(options: ProjectShortNameOptions, cwd: string): Promise<JsonRecord> {
+export async function setProjectShortName(
+	options: ProjectShortNameOptions,
+	cwd: string,
+	// sked fork: a running Kanban rebroadcasts the project summaries, so open boards relabel their chips.
+	onSaved?: (workspaceId: string) => Promise<void>,
+): Promise<JsonRecord> {
 	const shortName = options.set?.trim();
 	if ((shortName === undefined) === (options.clear !== true)) {
 		throw new Error("Pass exactly one of --set <name> or --clear.");
 	}
 	const workspaceId = await resolveProjectId(options, cwd);
 	await setWorkspaceShortName(workspaceId, shortName ?? null);
+	await onSaved?.(workspaceId);
 	const entries = await listWorkspaceIndexEntries();
 	const entry = entries.find((candidate) => candidate.workspaceId === workspaceId);
 	if (!entry) {
@@ -112,6 +119,8 @@ export function registerProjectCommand(program: Command): void {
 			].join("\n"),
 		)
 		.action(async (options: ProjectShortNameOptions) => {
-			await runProjectCommand(async () => await setProjectShortName(options, process.cwd()));
+			await runProjectCommand(
+				async () => await setProjectShortName(options, process.cwd(), notifyRuntimeWorkspaceById),
+			);
 		});
 }

@@ -132,7 +132,7 @@ describe("sked fork: cross-project task refs", () => {
 		expect(columnByTaskId.get("dbRevw")).toBe("in_progress");
 	});
 
-	it("resolves nothing for a board that could not be read", () => {
+	it("resolves nothing for a project whose board was never read", () => {
 		const result = collectReferencedTasksByProjectId([
 			{ workspaceId: "web", board: webBoard },
 			{ workspaceId: "db", board: null },

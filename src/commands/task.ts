@@ -307,7 +307,7 @@ async function notifyRuntimeWorkspaceStateUpdated(
 }
 
 // sked fork: tell a running Kanban that a workspace's board changed on disk; a no-op when none runs.
-async function notifyRuntimeWorkspaceById(workspaceId: string): Promise<void> {
+export async function notifyRuntimeWorkspaceById(workspaceId: string): Promise<void> {
 	await notifyRuntimeWorkspaceStateUpdated(createRuntimeTrpcClient(workspaceId));
 }
 
