@@ -2,8 +2,8 @@ import { type BeforeCapture, DragDropContext, Droppable, type DropResult } from 
 import { ChevronDown, ChevronRight, Play, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import { BoardCard } from "@/components/board-card";
+import type { CrossProjectTaskReferences } from "@/components/dependencies/cross-project-task-references";
 import {
 	type TaskReferences,
 	useTaskReferenceNavigation,
@@ -248,6 +248,7 @@ export function ColumnContextPanel({
 	editingTaskId,
 	inlineTaskEditor,
 	onEditTask,
+	crossProjectTaskReferences,
 	onSaveTaskTitle,
 	onCommitTask,
 	onOpenPrTask,
@@ -270,6 +271,8 @@ export function ColumnContextPanel({
 	editingTaskId?: string | null;
 	inlineTaskEditor?: ReactNode;
 	onEditTask?: (card: BoardCardModel) => void;
+	/** sked fork: resolves and opens prerequisite chips on other projects' boards. */
+	crossProjectTaskReferences?: CrossProjectTaskReferences;
 	onSaveTaskTitle?: (taskId: string, title: string) => void;
 	onCommitTask?: (taskId: string) => void;
 	onOpenPrTask?: (taskId: string) => void;
@@ -284,7 +287,12 @@ export function ColumnContextPanel({
 	const [activeDragSourceColumnId, setActiveDragSourceColumnId] = useState<BoardColumnId | null>(null);
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 	// sked fork: lets each card's prerequisite chips resolve and open the cards they name.
-	const taskReferences = useTaskReferenceNavigation({ columns: selection.allColumns, onCardSelect, onEditTask });
+	const taskReferences = useTaskReferenceNavigation({
+		columns: selection.allColumns,
+		onCardSelect,
+		onEditTask,
+		crossProject: crossProjectTaskReferences,
+	});
 
 	const handleBeforeCapture = useCallback(
 		(start: BeforeCapture) => {

@@ -36,6 +36,7 @@ import { KanbanAccessBlockedFallback } from "@/hooks/kanban-access-blocked-fallb
 import { RuntimeDisconnectedFallback } from "@/hooks/runtime-disconnected-fallback";
 import { useAppHotkeys } from "@/hooks/use-app-hotkeys";
 import { useBoardInteractions } from "@/hooks/use-board-interactions";
+import { useCrossProjectTaskNavigation } from "@/hooks/use-cross-project-task-navigation";
 import { useDebugTools } from "@/hooks/use-debug-tools";
 import { useDetailTaskNavigation } from "@/hooks/use-detail-task-navigation";
 import { useDocumentVisibility } from "@/hooks/use-document-visibility";
@@ -614,6 +615,20 @@ export default function App(): ReactElement {
 		setSelectedTaskId,
 	});
 
+	// sked fork: cross-project prerequisite chips resolve against `projects` and open across a project switch.
+	const crossProjectTaskReferences = useCrossProjectTaskNavigation({
+		projects,
+		currentProjectId,
+		board,
+		isBoardLoading:
+			isInitialRuntimeLoad || isProjectSwitching || isAwaitingWorkspaceSnapshot || isWorkspaceMetadataPending,
+		isProjectSwitching,
+		handleSelectProject,
+		setSelectedTaskId,
+		onCardSelect: handleCardSelect,
+		onEditTask: handleOpenEditTask,
+	});
+
 	useAppHotkeys({
 		selectedCard,
 		isDetailTerminalOpen,
@@ -943,6 +958,7 @@ export default function App(): ReactElement {
 												editingTaskId={editingTaskId}
 												inlineTaskEditor={inlineTaskEditor}
 												onEditTask={handleOpenEditTask}
+												crossProjectTaskReferences={crossProjectTaskReferences}
 												onSaveTaskTitle={handleSaveTaskTitle}
 												onCommitTask={handleCommitTask}
 												onOpenPrTask={handleOpenPrTask}
@@ -1029,6 +1045,7 @@ export default function App(): ReactElement {
 									onEditTask={(task) => {
 										handleOpenEditTask(task, { preserveDetailSelection: true });
 									}}
+									crossProjectTaskReferences={crossProjectTaskReferences}
 									onSaveTaskTitle={handleSaveTaskTitle}
 									onCommitTask={handleCommitTask}
 									onOpenPrTask={handleOpenPrTask}

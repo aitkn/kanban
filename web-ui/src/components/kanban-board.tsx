@@ -10,8 +10,8 @@ import {
 } from "@hello-pangea/dnd";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { BoardColumn } from "@/components/board-column";
+import type { CrossProjectTaskReferences } from "@/components/dependencies/cross-project-task-references";
 import { DependencyOverlay } from "@/components/dependencies/dependency-overlay";
 import { useDependencyLinking } from "@/components/dependencies/use-dependency-linking";
 import { useTaskReferenceNavigation } from "@/components/dependencies/use-task-reference-navigation";
@@ -39,6 +39,7 @@ export function KanbanBoard({
 	editingTaskId,
 	inlineTaskEditor,
 	onEditTask,
+	crossProjectTaskReferences,
 	onSaveTaskTitle,
 	onCommitTask,
 	onOpenPrTask,
@@ -66,6 +67,8 @@ export function KanbanBoard({
 	editingTaskId?: string | null;
 	inlineTaskEditor?: ReactNode;
 	onEditTask?: (card: BoardCard) => void;
+	/** sked fork: resolves and opens prerequisite chips on other projects' boards. */
+	crossProjectTaskReferences?: CrossProjectTaskReferences;
 	onSaveTaskTitle?: (taskId: string, title: string) => void;
 	onCommitTask?: (taskId: string) => void;
 	onOpenPrTask?: (taskId: string) => void;
@@ -104,7 +107,12 @@ export function KanbanBoard({
 
 	const pendingPrerequisiteCountByTaskId = useMemo(() => getPendingPrerequisiteCountByTaskId(data), [data]);
 	// sked fork: lets each card's prerequisite chips resolve and open the cards they name.
-	const taskReferences = useTaskReferenceNavigation({ columns: data.columns, onCardSelect, onEditTask });
+	const taskReferences = useTaskReferenceNavigation({
+		columns: data.columns,
+		onCardSelect,
+		onEditTask,
+		crossProject: crossProjectTaskReferences,
+	});
 
 	const programmaticSensor: Sensor = useCallback((api: SensorAPI) => {
 		sensorApiRef.current = api;

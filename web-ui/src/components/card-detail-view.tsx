@@ -2,6 +2,7 @@ import type { DropResult } from "@hello-pangea/dnd";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useCallback, useRef } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
+import type { CrossProjectTaskReferences } from "@/components/dependencies/cross-project-task-references";
 import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-panel";
 import { ClineAgentChatPanel } from "@/components/detail-panels/cline-agent-chat-panel";
 import { ColumnContextPanel } from "@/components/detail-panels/column-context-panel";
@@ -149,6 +150,7 @@ export function CardDetailView({
 	editingTaskId,
 	inlineTaskEditor,
 	onEditTask,
+	crossProjectTaskReferences,
 	onSaveTaskTitle,
 	onCommitTask,
 	onOpenPrTask,
@@ -204,6 +206,8 @@ export function CardDetailView({
 	editingTaskId?: string | null;
 	inlineTaskEditor?: ReactNode;
 	onEditTask?: (card: BoardCard) => void;
+	/** sked fork: resolves and opens prerequisite chips on other projects' boards. */
+	crossProjectTaskReferences?: CrossProjectTaskReferences;
 	onSaveTaskTitle?: (taskId: string, title: string) => void;
 	onCommitTask?: (taskId: string) => void;
 	onOpenPrTask?: (taskId: string) => void;
@@ -450,6 +454,7 @@ export function CardDetailView({
 					editingTaskId={editingTaskId}
 					inlineTaskEditor={inlineTaskEditor}
 					onEditTask={onEditTask}
+					crossProjectTaskReferences={crossProjectTaskReferences}
 					onSaveTaskTitle={onSaveTaskTitle}
 					onCommitTask={onCommitTask}
 					onOpenPrTask={onOpenPrTask}

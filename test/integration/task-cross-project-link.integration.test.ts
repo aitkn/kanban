@@ -247,9 +247,15 @@ describe.sequential("sked fork: project short names", () => {
 				],
 			});
 
-			expect(await setProjectShortName({ set: "data" }, dbPath)).toMatchObject({
+			// sked fork: a running Kanban is told, so open boards relabel their cross-project chips.
+			const notified: string[] = [];
+			const notify = async (workspaceId: string) => {
+				notified.push(workspaceId);
+			};
+			expect(await setProjectShortName({ set: "data" }, dbPath, notify)).toMatchObject({
 				project: { id: "skedai-db", shortName: "data", displayShortName: "data" },
 			});
+			expect(notified).toEqual(["skedai-db"]);
 			await linkCrossProjectTask({
 				cwd: webPath,
 				taskId: "web01",
@@ -265,7 +271,7 @@ describe.sequential("sked fork: project short names", () => {
 				}),
 			).rejects.toThrow("already depends on");
 
-			await expect(setProjectShortName({ projectId: "skedai-web", set: "data" }, "/")).rejects.toThrow(
+			await expect(setProjectShortName({ projectId: "skedai-web", set: "data" }, "/", notify)).rejects.toThrow(
 				'Short name "data" is already used by project "skedai-db".',
 			);
 			await expect(setProjectShortName({ projectPath: webPath, set: "skedai-db" }, "/")).rejects.toThrow(
@@ -277,6 +283,8 @@ describe.sequential("sked fork: project short names", () => {
 				"exactly one of",
 			);
 			await expect(setWorkspaceShortName("skedai-nope", "x")).rejects.toThrow('Project "skedai-nope" is not added');
+			// A refused name changed nothing, so nothing was announced.
+			expect(notified).toEqual(["skedai-db"]);
 
 			// Re-setting a project's own short name is not a clash.
 			await setProjectShortName({ projectId: "skedai-db", set: "data" }, "/");

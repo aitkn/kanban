@@ -4,9 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardCard } from "@/components/board-card";
+import {
+	type CrossProjectTaskReferences,
+	resolveCrossProjectTaskReference,
+} from "@/components/dependencies/cross-project-task-references";
 import { useTaskReferenceNavigation } from "@/components/dependencies/use-task-reference-navigation";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { RuntimeTaskSessionSummary } from "@/runtime/types";
+import type { RuntimeProjectSummary, RuntimeTaskSessionSummary } from "@/runtime/types";
 import type { BoardCard as BoardCardModel, BoardColumn, ReviewTaskWorkspaceSnapshot } from "@/types";
 
 let mockWorkspaceSnapshot: ReviewTaskWorkspaceSnapshot | undefined;
@@ -977,6 +981,144 @@ describe("BoardCard", () => {
 			expect(handlers.onCardSelect).not.toHaveBeenCalled();
 			expect(handlers.onEditTask).not.toHaveBeenCalled();
 			expect(handlers.onCardClick).not.toHaveBeenCalled();
+		});
+
+		describe("on another project's board", () => {
+			const crossCard = createCard({
+				id: "wait2",
+				title: "Waiting on db",
+				prompt: "Waiting on db",
+				dependsOn: [
+					{ taskId: "back1" },
+					{ taskId: "dbBack", projectId: "skedai-db" },
+					{ taskId: "dbProg", projectId: "skedai-db" },
+					{ taskId: "dbRevw", projectId: "skedai-db" },
+					{ taskId: "dbDone", projectId: "skedai-db" },
+					{ taskId: "dbGone", projectId: "skedai-db" },
+					{ taskId: "x1234", projectId: "removed-project" },
+				],
+			});
+			const projects: RuntimeProjectSummary[] = [
+				{
+					id: "skedai-db",
+					path: "/repos/skedai-db",
+					name: "skedai-db",
+					shortName: "db",
+					taskCounts: { backlog: 1, in_progress: 1, review: 1, trash: 1 },
+					referencedTasks: [
+						{ taskId: "dbBack", title: "Add the column", columnId: "backlog" },
+						{ taskId: "dbProg", title: "Migrate rows", columnId: "in_progress" },
+						{ taskId: "dbRevw", title: "Index it", columnId: "review" },
+						{ taskId: "dbDone", title: "Drop the old table", columnId: "trash" },
+					],
+				},
+			];
+
+			function CrossHarness({
+				onCardClick,
+				openProjectTask,
+				withCrossProject,
+			}: {
+				onCardClick: () => void;
+				openProjectTask: CrossProjectTaskReferences["openProjectTask"];
+				withCrossProject: boolean;
+			}): React.ReactElement {
+				const crossProject: CrossProjectTaskReferences = {
+					resolveProjectTask: (projectId, taskId) => resolveCrossProjectTaskReference(projects, projectId, taskId),
+					openProjectTask,
+				};
+				const taskReferences = useTaskReferenceNavigation({
+					columns,
+					onCardSelect: vi.fn(),
+					onEditTask: vi.fn(),
+					crossProject: withCrossProject ? crossProject : undefined,
+				});
+				return (
+					<TooltipProvider>
+						<BoardCard
+							card={crossCard}
+							index={0}
+							columnId="backlog"
+							onClick={onCardClick}
+							taskReferences={taskReferences}
+						/>
+					</TooltipProvider>
+				);
+			}
+
+			async function renderCrossChips(withCrossProject = true) {
+				const handlers = { onCardClick: vi.fn(), openProjectTask: vi.fn() };
+				await act(async () => {
+					root.render(<CrossHarness {...handlers} withCrossProject={withCrossProject} />);
+				});
+				return handlers;
+			}
+
+			it("shows <shortName>#<taskId> chips coloured by the other card's column, beside same-board chips", async () => {
+				await renderCrossChips();
+
+				expect(
+					Array.from(container.querySelectorAll("button[data-reference-state]")).map((button) => [
+						button.textContent,
+						button.getAttribute("data-reference-state"),
+					]),
+				).toEqual([
+					["back1", "backlog"],
+					["db#dbBack", "backlog"],
+					["db#dbProg", "in_progress"],
+					["db#dbRevw", "review"],
+					["db#dbDone", "trash"],
+					["db#dbGone", "deleted"],
+					["removed-project#x1234", "deleted"],
+				]);
+				expect(chip("db#dbBack").className).toContain("text-status-red");
+				expect(chip("db#dbProg").className).toContain("text-status-orange");
+				expect(chip("db#dbRevw").className).toContain("text-status-gold");
+				expect(chip("db#dbDone").className).toContain("text-status-green");
+				for (const deleted of ["db#dbGone", "removed-project#x1234"]) {
+					expect(chip(deleted).className).toContain("line-through");
+					expect(chip(deleted).getAttribute("aria-label")).toContain("card deleted");
+				}
+				expect(chip("db#dbRevw").getAttribute("aria-label")).toBe(
+					"Open prerequisite db#dbRevw in project skedai-db (Review)",
+				);
+			});
+
+			it("shows the project and the card title in the tooltip", async () => {
+				await renderCrossChips();
+
+				await act(async () => {
+					chip("db#dbRevw").focus();
+				});
+
+				expect(document.body.textContent).toContain("skedai-db · Review: Index it");
+			});
+
+			it("opens the other project's card without opening or dragging this card", async () => {
+				const handlers = await renderCrossChips();
+
+				const mouseDown = await press(chip("db#dbRevw"));
+				await press(chip("db#dbGone"));
+				await press(chip("removed-project#x1234"));
+
+				expect(mouseDown.defaultPrevented).toBe(true);
+				expect(handlers.openProjectTask.mock.calls).toEqual([
+					["skedai-db", "dbRevw"],
+					["skedai-db", "dbGone"],
+					["removed-project", "x1234"],
+				]);
+				expect(handlers.onCardClick).not.toHaveBeenCalled();
+			});
+
+			it("renders only same-board chips without cross-project references", async () => {
+				await renderCrossChips(false);
+
+				expect(
+					Array.from(container.querySelectorAll("button[data-reference-state]")).map(
+						(button) => button.textContent,
+					),
+				).toEqual(["back1"]);
+			});
 		});
 
 		it("renders no chips without task references or prerequisites", async () => {
