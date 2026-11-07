@@ -39,6 +39,17 @@ interface PendingProgrammaticCardMoveAvailability {
 
 export type ProgrammaticCardMoveAttemptResult = "started" | "blocked" | "unavailable";
 
+/**
+ * A programmatic move normally ends within a second: the animation, pangea's drop animation, and
+ * at worst the board's drop watchdog (see programmatic-card-drop.ts), which finishes it after 2s.
+ * One still in flight after this long is stuck, and is cleared so it cannot block every later
+ * programmatic move.
+ */
+export const PROGRAMMATIC_CARD_MOVE_STALE_MS = 4000;
+
+/** How many times a caller waits for a blocked programmatic move before giving up the animation. */
+export const MAX_PROGRAMMATIC_CARD_MOVE_BLOCKED_RETRIES = 3;
+
 export function useProgrammaticCardMoves(): {
 	handleProgrammaticCardMoveReady: (requestMove: RequestProgrammaticCardMove | null) => void;
 	setRequestMoveTaskToTrashHandler: (handler: RequestMoveTaskToTrash) => void;
@@ -57,6 +68,7 @@ export function useProgrammaticCardMoves(): {
 } {
 	const requestProgrammaticCardMoveRef = useRef<RequestProgrammaticCardMove | null>(null);
 	const programmaticCardMoveInFlightRef = useRef<ProgrammaticCardMoveInFlight | null>(null);
+	const programmaticCardMoveStartedAtRef = useRef(0);
 	const programmaticCardMoveBehaviorByTaskIdRef = useRef<Record<string, ProgrammaticCardMoveBehavior>>({});
 	const pendingProgrammaticTrashMoveCompletionByTaskIdRef = useRef<
 		Record<string, PendingProgrammaticTrashMoveCompletion>
@@ -64,10 +76,6 @@ export function useProgrammaticCardMoves(): {
 	const requestMoveTaskToTrashRef = useRef<RequestMoveTaskToTrash | null>(null);
 	const pendingProgrammaticCardMoveAvailabilityRef = useRef<PendingProgrammaticCardMoveAvailability[]>([]);
 	const [programmaticCardMoveCycle, setProgrammaticCardMoveCycle] = useState(0);
-
-	const handleProgrammaticCardMoveReady = useCallback((requestMove: RequestProgrammaticCardMove | null) => {
-		requestProgrammaticCardMoveRef.current = requestMove;
-	}, []);
 
 	const setRequestMoveTaskToTrashHandler = useCallback((handler: RequestMoveTaskToTrash) => {
 		requestMoveTaskToTrashRef.current = handler;
@@ -89,6 +97,17 @@ export function useProgrammaticCardMoves(): {
 		}
 	}, []);
 
+	const handleProgrammaticCardMoveReady = useCallback(
+		(requestMove: RequestProgrammaticCardMove | null) => {
+			requestProgrammaticCardMoveRef.current = requestMove;
+			if (!requestMove) {
+				// The board that was animating the move is gone, and so is its onDragEnd.
+				clearProgrammaticCardMoveInFlight();
+			}
+		},
+		[clearProgrammaticCardMoveInFlight],
+	);
+
 	const tryProgrammaticCardMove = useCallback(
 		(
 			taskId: string,
@@ -100,8 +119,13 @@ export function useProgrammaticCardMoves(): {
 			if (!requestMove) {
 				return "unavailable";
 			}
-			if (programmaticCardMoveInFlightRef.current) {
-				return "blocked";
+			const inFlight = programmaticCardMoveInFlightRef.current;
+			if (inFlight) {
+				if (performance.now() - programmaticCardMoveStartedAtRef.current < PROGRAMMATIC_CARD_MOVE_STALE_MS) {
+					return "blocked";
+				}
+				delete programmaticCardMoveBehaviorByTaskIdRef.current[inFlight.taskId];
+				clearProgrammaticCardMoveInFlight(inFlight.taskId);
 			}
 			const programmaticCardMoveInFlight: ProgrammaticCardMoveInFlight = {
 				taskId,
@@ -115,6 +139,7 @@ export function useProgrammaticCardMoves(): {
 				delete programmaticCardMoveBehaviorByTaskIdRef.current[taskId];
 			}
 			programmaticCardMoveInFlightRef.current = programmaticCardMoveInFlight;
+			programmaticCardMoveStartedAtRef.current = performance.now();
 			const started = requestMove(programmaticCardMoveInFlight);
 			if (!started) {
 				clearProgrammaticCardMoveInFlight(taskId);
@@ -189,8 +214,13 @@ export function useProgrammaticCardMoves(): {
 		};
 	}, [resetProgrammaticCardMoves]);
 
-	const requestMoveTaskToTrashWithAnimation = useCallback<RequestMoveTaskToTrash>(
-		async (taskId, fromColumnId, options) => {
+	const requestMoveTaskToTrashWithAnimationAttempt = useCallback(
+		async (
+			taskId: string,
+			fromColumnId: BoardColumnId,
+			options: RequestMoveTaskToTrashOptions | undefined,
+			blockedRetries: number,
+		): Promise<void> => {
 			const requestMoveTaskToTrash = requestMoveTaskToTrashRef.current;
 			if (!requestMoveTaskToTrash) {
 				return;
@@ -220,13 +250,13 @@ export function useProgrammaticCardMoves(): {
 			const programmaticMoveAttempt = tryProgrammaticCardMove(taskId, fromColumnId, "trash", {
 				skipWorkingChangeWarning: options?.skipWorkingChangeWarning,
 			});
-			if (programmaticMoveAttempt === "blocked") {
+			if (programmaticMoveAttempt === "blocked" && blockedRetries < MAX_PROGRAMMATIC_CARD_MOVE_BLOCKED_RETRIES) {
 				resolvePendingProgrammaticTrashMove(taskId);
 				await waitForProgrammaticCardMoveAvailability();
-				await requestMoveTaskToTrashWithAnimation(taskId, fromColumnId, options);
+				await requestMoveTaskToTrashWithAnimationAttempt(taskId, fromColumnId, options, blockedRetries + 1);
 				return;
 			}
-			if (programmaticMoveAttempt === "unavailable") {
+			if (programmaticMoveAttempt !== "started") {
 				resolvePendingProgrammaticTrashMove(taskId);
 				await requestMoveTaskToTrash(taskId, fromColumnId, options);
 				return;
@@ -235,6 +265,11 @@ export function useProgrammaticCardMoves(): {
 			await completionPromise;
 		},
 		[resolvePendingProgrammaticTrashMove, tryProgrammaticCardMove, waitForProgrammaticCardMoveAvailability],
+	);
+
+	const requestMoveTaskToTrashWithAnimation = useCallback<RequestMoveTaskToTrash>(
+		(taskId, fromColumnId, options) => requestMoveTaskToTrashWithAnimationAttempt(taskId, fromColumnId, options, 0),
+		[requestMoveTaskToTrashWithAnimationAttempt],
 	);
 
 	return {

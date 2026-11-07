@@ -15,6 +15,13 @@ import type { CrossProjectTaskReferences } from "@/components/dependencies/cross
 import { DependencyOverlay } from "@/components/dependencies/dependency-overlay";
 import { useDependencyLinking } from "@/components/dependencies/use-dependency-linking";
 import { useTaskReferenceNavigation } from "@/components/dependencies/use-task-reference-navigation";
+import {
+	buildProgrammaticDropResult,
+	nudgeStalledDropAnimation,
+	PROGRAMMATIC_DROP_FORCE_END_DELAY_MS,
+	PROGRAMMATIC_DROP_NUDGE_DELAY_MS,
+	retargetProgrammaticDropResult,
+} from "@/components/programmatic-card-drop";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { canCreateTaskDependency, getPendingPrerequisiteCountByTaskId } from "@/state/board-state";
 import { findCardColumnId, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
@@ -91,6 +98,8 @@ export function KanbanBoard({
 	const sensorApiRef = useRef<SensorAPI | null>(null);
 	const latestDataRef = useRef<BoardData>(data);
 	const programmaticCardMoveInFlightRef = useRef<ProgrammaticCardMoveInFlight | null>(null);
+	const programmaticDropWatchdogTimeoutIdRef = useRef<number | null>(null);
+	const handleDragEndRef = useRef<(result: DropResult) => void>(() => {});
 	const [activeDragTaskId, setActiveDragTaskId] = useState<string | null>(null);
 
 	const [activeDragSourceColumnId, setActiveDragSourceColumnId] = useState<BoardColumnId | null>(null);
@@ -198,13 +207,60 @@ export function KanbanBoard({
 		[],
 	);
 
-	const clearProgrammaticCardMoveInFlight = useCallback((taskId?: string) => {
-		if (taskId && programmaticCardMoveInFlightRef.current?.taskId !== taskId) {
-			return;
+	const clearProgrammaticDropWatchdog = useCallback(() => {
+		if (programmaticDropWatchdogTimeoutIdRef.current !== null) {
+			window.clearTimeout(programmaticDropWatchdogTimeoutIdRef.current);
+			programmaticDropWatchdogTimeoutIdRef.current = null;
 		}
-		programmaticCardMoveInFlightRef.current = null;
-		setProgrammaticCardMoveInFlight(null);
 	}, []);
+
+	const clearProgrammaticCardMoveInFlight = useCallback(
+		(taskId?: string) => {
+			if (taskId && programmaticCardMoveInFlightRef.current?.taskId !== taskId) {
+				return;
+			}
+			clearProgrammaticDropWatchdog();
+			programmaticCardMoveInFlightRef.current = null;
+			setProgrammaticCardMoveInFlight(null);
+		},
+		[clearProgrammaticDropWatchdog],
+	);
+
+	useEffect(() => clearProgrammaticDropWatchdog, [clearProgrammaticDropWatchdog]);
+
+	// Called right after a programmatic drag is dropped. A dropped move normally ends in
+	// onDragEnd within pangea's drop animation (at most 0.55s). If it has not, first release a
+	// drop animation stalled on a transitionend that never fires; if even that does not end the
+	// drag, finish the move ourselves so neither the command nor later programmatic moves are lost.
+	const armProgrammaticDropWatchdog = useCallback(
+		(move: ProgrammaticCardMoveInFlight) => {
+			clearProgrammaticDropWatchdog();
+			const isStillInFlight = () => programmaticCardMoveInFlightRef.current === move;
+			programmaticDropWatchdogTimeoutIdRef.current = window.setTimeout(() => {
+				programmaticDropWatchdogTimeoutIdRef.current = null;
+				if (!isStillInFlight()) {
+					return;
+				}
+				nudgeStalledDropAnimation(move.taskId);
+				if (!isStillInFlight()) {
+					return;
+				}
+				programmaticDropWatchdogTimeoutIdRef.current = window.setTimeout(() => {
+					programmaticDropWatchdogTimeoutIdRef.current = null;
+					if (!isStillInFlight()) {
+						return;
+					}
+					const result = buildProgrammaticDropResult(move, latestDataRef.current);
+					if (!result) {
+						clearProgrammaticCardMoveInFlight(move.taskId);
+						return;
+					}
+					handleDragEndRef.current(result);
+				}, PROGRAMMATIC_DROP_FORCE_END_DELAY_MS - PROGRAMMATIC_DROP_NUDGE_DELAY_MS);
+			}, PROGRAMMATIC_DROP_NUDGE_DELAY_MS);
+		},
+		[clearProgrammaticCardMoveInFlight, clearProgrammaticDropWatchdog],
+	);
 
 	const requestProgrammaticCardMove = useCallback<RequestProgrammaticCardMove>(
 		(move) => {
@@ -261,6 +317,33 @@ export function KanbanBoard({
 				const travelDistance = Math.hypot(deltaX, deltaY);
 				const durationMs = Math.min(224, Math.max(133, 102 + travelDistance * 0.126)) * 0.5;
 				const easeInOutCubic = (value: number) => (value < 0.5 ? 4 * value ** 3 : 1 - (-2 * value + 2) ** 3 / 2);
+				const cancelAfterError = () => {
+					clearProgrammaticCardMoveInFlight(taskId);
+					if (dragActions.isActive()) {
+						dragActions.cancel();
+					}
+				};
+				// Fluid `move()` is rafSchd-throttled: it is dispatched on the next animation frame,
+				// and `drop()` cancels a move still waiting for its frame. Dropping in the same frame
+				// as the final move therefore drops wherever the previous frame left the card, which
+				// is at home when frames are longer than the whole animation. Drop two frames later
+				// instead: the next frame dispatches the final move, and the card is painted there
+				// before the drop, so pangea's drop animation has a painted transform to run from.
+				const dropAfterFinalMoveIsPainted = () => {
+					window.requestAnimationFrame(() => {
+						window.requestAnimationFrame(() => {
+							if (!dragActions.isActive()) {
+								return;
+							}
+							try {
+								dragActions.drop();
+								armProgrammaticDropWatchdog(move);
+							} catch {
+								cancelAfterError();
+							}
+						});
+					});
+				};
 				const animate = (frameTime: number) => {
 					if (!dragActions.isActive()) {
 						return;
@@ -273,15 +356,12 @@ export function KanbanBoard({
 							y: startClientSelection.y + deltaY * easedProgress,
 						});
 						if (progress >= 1) {
-							dragActions.drop();
+							dropAfterFinalMoveIsPainted();
 							return;
 						}
 						window.requestAnimationFrame(animate);
 					} catch {
-						clearProgrammaticCardMoveInFlight(taskId);
-						if (dragActions.isActive()) {
-							dragActions.cancel();
-						}
+						cancelAfterError();
 					}
 				};
 
@@ -313,6 +393,7 @@ export function KanbanBoard({
 				try {
 					if (stepIndex >= moveSteps.length) {
 						dragActions.drop();
+						armProgrammaticDropWatchdog(move);
 						return;
 					}
 					moveSteps[stepIndex]?.();
@@ -335,6 +416,7 @@ export function KanbanBoard({
 			return true;
 		},
 		[
+			armProgrammaticDropWatchdog,
 			canAnimateProgrammaticTopInsertion,
 			clearProgrammaticCardMoveInFlight,
 			getElementClientCenter,
@@ -363,16 +445,25 @@ export function KanbanBoard({
 
 	const handleDragEnd = useCallback(
 		(result: DropResult) => {
+			const landedResult = retargetProgrammaticDropResult(
+				result,
+				programmaticCardMoveInFlightRef.current,
+				latestDataRef.current,
+			);
 			setActiveDragTaskId(null);
 			setActiveDragSourceColumnId(null);
 			clearProgrammaticCardMoveInFlight(result.draggableId);
 			requestAnimationFrame(() => {
 				dragOccurredRef.current = false;
 			});
-			onDragEnd(result);
+			onDragEnd(landedResult);
 		},
 		[clearProgrammaticCardMoveInFlight, onDragEnd],
 	);
+
+	useEffect(() => {
+		handleDragEndRef.current = handleDragEnd;
+	}, [handleDragEnd]);
 
 	// Dependency links should reroute as soon as motion starts, not only after drop.
 	// Treat the active card as already belonging to its destination/effective column
