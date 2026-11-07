@@ -1,3 +1,4 @@
+import type { DropResult } from "@hello-pangea/dnd";
 import type { ReactNode } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -10,6 +11,7 @@ const dndMock = vi.hoisted(() => ({
 	sensorApi: null as {
 		tryGetLock: ReturnType<typeof vi.fn>;
 	} | null,
+	onDragEnd: null as ((result: DropResult) => void) | null,
 }));
 
 vi.mock("@hello-pangea/dnd", async () => {
@@ -19,10 +21,13 @@ vi.mock("@hello-pangea/dnd", async () => {
 		DragDropContext: ({
 			children,
 			sensors,
+			onDragEnd,
 		}: {
 			children: ReactNode;
 			sensors?: Array<(api: NonNullable<typeof dndMock.sensorApi>) => void>;
+			onDragEnd: (result: DropResult) => void;
 		}): React.ReactElement => {
+			dndMock.onDragEnd = onDragEnd;
 			React.useEffect(() => {
 				if (!dndMock.sensorApi) {
 					return;
@@ -42,7 +47,7 @@ vi.mock("@/components/board-column", () => ({
 		<section data-column-id={column.id}>
 			<div className="kb-column-cards">
 				{column.cards.map((card) => (
-					<div key={card.id} data-task-id={card.id} />
+					<div key={card.id} data-task-id={card.id} data-rfd-draggable-id={card.id} />
 				))}
 			</div>
 		</section>
@@ -73,6 +78,139 @@ function createRect(left: number, top: number, width: number, height: number): D
 		bottom: top + height,
 		toJSON: () => ({}),
 	} as DOMRect;
+}
+
+function createCard(id: string): BoardData["columns"][number]["cards"][number] {
+	return {
+		id,
+		title: id,
+		prompt: id,
+		startInPlanMode: false,
+		autoReviewEnabled: false,
+		autoReviewMode: "commit",
+		baseRef: "main",
+		createdAt: 1,
+		updatedAt: 1,
+	};
+}
+
+function createStartBoard(): BoardData {
+	return {
+		columns: [
+			{ id: "backlog", title: "Backlog", cards: [createCard("source-task")] },
+			{ id: "in_progress", title: "In Progress", cards: [createCard("target-task-1")] },
+			{ id: "review", title: "Review", cards: [] },
+			{ id: "trash", title: "Done", cards: [] },
+		],
+		dependencies: [],
+	};
+}
+
+/**
+ * Browser-like animation frames: every callback requested before a frame runs in that frame, in
+ * request order, with the frame's timestamp; callbacks requested during a frame run in the next.
+ */
+function installAnimationFrames(frameMs: number): void {
+	let queue: Array<{ id: number; callback: FrameRequestCallback }> = [];
+	const cancelled = new Set<number>();
+	let nextId = 1;
+	let frameTimeoutId: number | null = null;
+	const runFrame = () => {
+		frameTimeoutId = null;
+		const callbacks = queue;
+		queue = [];
+		const frameTime = performance.now();
+		for (const { id, callback } of callbacks) {
+			if (!cancelled.delete(id)) {
+				callback(frameTime);
+			}
+		}
+	};
+	vi.mocked(window.requestAnimationFrame).mockImplementation((callback: FrameRequestCallback) => {
+		const id = nextId;
+		nextId += 1;
+		queue.push({ id, callback });
+		if (frameTimeoutId === null) {
+			frameTimeoutId = window.setTimeout(runFrame, frameMs);
+		}
+		return id;
+	});
+	vi.mocked(window.cancelAnimationFrame).mockImplementation((id: number) => {
+		cancelled.add(id);
+	});
+}
+
+interface FakeFluidDrag {
+	/** Where pangea's drop landed before the board saw it; undefined until dropped. */
+	droppedDestination: string | null | undefined;
+	release: () => void;
+}
+
+/**
+ * Stands in for @hello-pangea/dnd 18.0.1's fluid drag: `move()` is rafSchd-throttled (dispatched
+ * on the next frame with the latest point), `drop()` cancels a move still waiting for its frame,
+ * and the drop lands in whichever column the last dispatched point is over.
+ */
+function installFakeFluidDrag(options: { landsAtHome?: boolean; stallsOnDrop?: boolean } = {}): FakeFluidDrag {
+	let active = true;
+	let pendingMoveFrameId: number | null = null;
+	let pendingPoint: { x: number; y: number } | null = null;
+	let dispatchedPoint: { x: number; y: number } | null = null;
+	let dropResult: DropResult | null = null;
+	const fake: FakeFluidDrag = {
+		droppedDestination: undefined,
+		release: () => {
+			if (dropResult) {
+				dndMock.onDragEnd?.(dropResult);
+			}
+		},
+	};
+	const dragActions = {
+		isActive: () => active,
+		move: (point: { x: number; y: number }) => {
+			pendingPoint = point;
+			if (pendingMoveFrameId === null) {
+				pendingMoveFrameId = window.requestAnimationFrame(() => {
+					pendingMoveFrameId = null;
+					dispatchedPoint = pendingPoint;
+				});
+			}
+		},
+		drop: () => {
+			if (pendingMoveFrameId !== null) {
+				window.cancelAnimationFrame(pendingMoveFrameId);
+				pendingMoveFrameId = null;
+			}
+			active = false;
+			const overTarget = !options.landsAtHome && dispatchedPoint !== null && dispatchedPoint.x >= 292;
+			const destinationColumnId = overTarget ? "in_progress" : "backlog";
+			fake.droppedDestination = destinationColumnId;
+			dropResult = {
+				draggableId: "source-task",
+				type: "CARD",
+				source: { droppableId: "backlog", index: 0 },
+				destination: { droppableId: destinationColumnId, index: 0 },
+				combine: null,
+				mode: "FLUID",
+				reason: "DROP",
+			};
+			if (!options.stallsOnDrop) {
+				fake.release();
+			}
+		},
+		cancel: () => {
+			active = false;
+		},
+	};
+	const preDrag = {
+		fluidLift: vi.fn(() => dragActions),
+		isActive: vi.fn(() => true),
+		abort: vi.fn(),
+	};
+	dndMock.sensorApi = {
+		tryGetLock: vi.fn(() => preDrag),
+	};
+	return fake;
 }
 
 describe("KanbanBoard", () => {
@@ -124,6 +262,7 @@ describe("KanbanBoard", () => {
 			root.unmount();
 		});
 		dndMock.sensorApi = null;
+		dndMock.onDragEnd = null;
 		vi.restoreAllMocks();
 		vi.useRealTimers();
 		container.remove();
@@ -224,5 +363,153 @@ describe("KanbanBoard", () => {
 		});
 
 		expect(boardElement?.dataset.programmaticCardMove).toBe("true");
+	});
+	async function renderStartBoard(onDragEnd: (result: DropResult) => void): Promise<RequestProgrammaticCardMove> {
+		let requestMove: RequestProgrammaticCardMove | null = null;
+		await act(async () => {
+			root.render(
+				<KanbanBoard
+					data={createStartBoard()}
+					taskSessions={{}}
+					onCardSelect={() => {}}
+					onCreateTask={() => {}}
+					dependencies={[]}
+					onDragEnd={onDragEnd}
+					onRequestProgrammaticCardMoveReady={(nextRequestMove) => {
+						requestMove = nextRequestMove;
+					}}
+				/>,
+			);
+		});
+		if (!requestMove) {
+			throw new Error("Expected the board to offer programmatic moves.");
+		}
+		return requestMove;
+	}
+
+	async function startProgrammaticMove(requestMove: RequestProgrammaticCardMove): Promise<void> {
+		await act(async () => {
+			expect(
+				requestMove({
+					taskId: "source-task",
+					fromColumnId: "backlog",
+					toColumnId: "in_progress",
+					insertAtTop: true,
+				}),
+			).toBe(true);
+		});
+	}
+
+	async function advance(ms: number): Promise<void> {
+		await act(async () => {
+			vi.advanceTimersByTime(ms);
+		});
+	}
+
+	const getBoardElement = () => container.querySelector<HTMLElement>(".kb-board");
+
+	it.each([16, 50, 200])("drops a programmatic move over its target with %ims animation frames", async (frameMs) => {
+		installAnimationFrames(frameMs);
+		const fake = installFakeFluidDrag();
+		const onDragEnd = vi.fn();
+		const requestMove = await renderStartBoard(onDragEnd);
+
+		await startProgrammaticMove(requestMove);
+		await advance(frameMs * 20);
+
+		expect(fake.droppedDestination).toBe("in_progress");
+		expect(onDragEnd).toHaveBeenCalledTimes(1);
+		expect(onDragEnd.mock.calls[0]?.[0].destination).toEqual({ droppableId: "in_progress", index: 0 });
+		expect(getBoardElement()?.dataset.programmaticCardMove).toBeUndefined();
+	});
+
+	it("lands a programmatic move on its target when pangea drops it at home", async () => {
+		installAnimationFrames(16);
+		const fake = installFakeFluidDrag({ landsAtHome: true });
+		const onDragEnd = vi.fn();
+		const requestMove = await renderStartBoard(onDragEnd);
+
+		await startProgrammaticMove(requestMove);
+		await advance(1000);
+
+		expect(fake.droppedDestination).toBe("backlog");
+		expect(onDragEnd).toHaveBeenCalledTimes(1);
+		expect(onDragEnd.mock.calls[0]?.[0]).toMatchObject({
+			draggableId: "source-task",
+			source: { droppableId: "backlog", index: 0 },
+			destination: { droppableId: "in_progress", index: 0 },
+		});
+	});
+
+	it("leaves a manual drop that misses its target alone", async () => {
+		installAnimationFrames(16);
+		const onDragEnd = vi.fn();
+		await renderStartBoard(onDragEnd);
+		const homeDrop: DropResult = {
+			draggableId: "source-task",
+			type: "CARD",
+			source: { droppableId: "backlog", index: 0 },
+			destination: { droppableId: "backlog", index: 0 },
+			combine: null,
+			mode: "FLUID",
+			reason: "DROP",
+		};
+
+		await act(async () => {
+			dndMock.onDragEnd?.(homeDrop);
+		});
+
+		expect(onDragEnd).toHaveBeenCalledWith(homeDrop);
+	});
+
+	it("releases a drop animation stalled on a transitionend that never fires", async () => {
+		installAnimationFrames(16);
+		const fake = installFakeFluidDrag({ stallsOnDrop: true });
+		const onDragEnd = vi.fn();
+		const requestMove = await renderStartBoard(onDragEnd);
+		const draggable = container.querySelector<HTMLElement>('[data-rfd-draggable-id="source-task"]');
+		const transitionEndProperties: string[] = [];
+		draggable?.addEventListener("transitionend", (event) => {
+			transitionEndProperties.push((event as TransitionEvent).propertyName);
+			fake.release();
+		});
+
+		await startProgrammaticMove(requestMove);
+		await advance(500);
+		expect(fake.droppedDestination).toBe("in_progress");
+		expect(onDragEnd).not.toHaveBeenCalled();
+		expect(getBoardElement()?.dataset.programmaticCardMove).toBe("true");
+
+		await advance(1000);
+
+		expect(transitionEndProperties).toEqual(["transform"]);
+		expect(onDragEnd).toHaveBeenCalledTimes(1);
+		expect(onDragEnd.mock.calls[0]?.[0].destination).toEqual({ droppableId: "in_progress", index: 0 });
+		expect(getBoardElement()?.dataset.programmaticCardMove).toBeUndefined();
+	});
+
+	it("finishes a programmatic move that pangea never ends", async () => {
+		installAnimationFrames(16);
+		installFakeFluidDrag({ landsAtHome: true, stallsOnDrop: true });
+		const onDragEnd = vi.fn();
+		const requestMove = await renderStartBoard(onDragEnd);
+
+		await startProgrammaticMove(requestMove);
+		await advance(1500);
+		expect(onDragEnd).not.toHaveBeenCalled();
+
+		await advance(1000);
+
+		expect(onDragEnd).toHaveBeenCalledTimes(1);
+		expect(onDragEnd.mock.calls[0]?.[0]).toMatchObject({
+			draggableId: "source-task",
+			reason: "DROP",
+			source: { droppableId: "backlog", index: 0 },
+			destination: { droppableId: "in_progress", index: 0 },
+		});
+		expect(getBoardElement()?.dataset.programmaticCardMove).toBeUndefined();
+
+		await advance(5000);
+		expect(onDragEnd).toHaveBeenCalledTimes(1);
 	});
 });

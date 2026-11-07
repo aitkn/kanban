@@ -470,7 +470,10 @@ export function applyDragResult(
 
 	const sourceCards = Array.from(sourceColumn.cards);
 	const [movedCard] = sourceCards.splice(source.index, 1);
-	if (!movedCard) {
+	// A drop result can arrive after the board already moved its card: a programmatic move that
+	// was finished without pangea, then reported by pangea late. Its source index then names
+	// whichever card took that slot, so never move a card other than the dragged one.
+	if (!movedCard || movedCard.id !== result.draggableId) {
 		return { board };
 	}
 

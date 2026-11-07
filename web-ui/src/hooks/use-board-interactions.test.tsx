@@ -1,8 +1,10 @@
+import type { DropResult } from "@hello-pangea/dnd";
 import { act, type Dispatch, type SetStateAction, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useBoardInteractions } from "@/hooks/use-board-interactions";
+import type * as ProgrammaticCardMovesModule from "@/hooks/use-programmatic-card-moves";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import type { BoardCard, BoardData } from "@/types";
@@ -21,7 +23,8 @@ vi.mock("@/hooks/use-linked-backlog-task-actions", () => ({
 	useLinkedBacklogTaskActions: useLinkedBacklogTaskActionsMock,
 }));
 
-vi.mock("@/hooks/use-programmatic-card-moves", () => ({
+vi.mock("@/hooks/use-programmatic-card-moves", async (importOriginal) => ({
+	...(await importOriginal<typeof ProgrammaticCardMovesModule>()),
 	useProgrammaticCardMoves: useProgrammaticCardMovesMock,
 }));
 
@@ -66,6 +69,7 @@ const NOOP_SEND_TASK_INPUT = async (): Promise<{ ok: boolean }> => ({ ok: true }
 const NOOP_RUN_AUTO_REVIEW = async (): Promise<boolean> => false;
 
 interface HookSnapshot {
+	handleDragEnd: (result: DropResult) => void;
 	handleRestoreTaskFromTrash: (taskId: string) => void;
 	handleStartTask: (taskId: string) => void;
 	handleCardSelect: (taskId: string) => void;
@@ -138,6 +142,7 @@ function HookHarness({
 
 	useEffect(() => {
 		onSnapshot?.({
+			handleDragEnd: actions.handleDragEnd,
 			handleRestoreTaskFromTrash: actions.handleRestoreTaskFromTrash,
 			handleStartTask: actions.handleStartTask,
 			handleCardSelect: actions.handleCardSelect,
@@ -146,6 +151,7 @@ function HookHarness({
 	}, [
 		actions.handleCardSelect,
 		actions.handleConfirmClearTrash,
+		actions.handleDragEnd,
 		actions.handleRestoreTaskFromTrash,
 		actions.handleStartTask,
 		onSnapshot,
@@ -838,5 +844,138 @@ describe("useBoardInteractions", () => {
 		expect(columnOf("task-running")).toBe("in_progress");
 		expect(columnOf("task-waiting")).toBe("review");
 		expect(columnOf("task-reused")).toBe("backlog");
+	});
+	function mockProgrammaticCardMoves(tryProgrammaticCardMove: () => "started" | "blocked" | "unavailable"): void {
+		useProgrammaticCardMovesMock.mockReturnValue({
+			handleProgrammaticCardMoveReady: () => {},
+			setRequestMoveTaskToTrashHandler: () => {},
+			tryProgrammaticCardMove,
+			consumeProgrammaticCardMove: () => ({}),
+			resolvePendingProgrammaticTrashMove: () => {},
+			waitForProgrammaticCardMoveAvailability: async () => {},
+			resetProgrammaticCardMoves: () => {},
+			requestMoveTaskToTrashWithAnimation: async () => {},
+			programmaticCardMoveCycle: 0,
+		});
+		useLinkedBacklogTaskActionsMock.mockReturnValue({
+			handleCreateDependency: () => {},
+			handleDeleteDependency: () => {},
+			confirmMoveTaskToTrash: async () => {},
+			requestMoveTaskToTrash: async () => {},
+		});
+	}
+
+	async function renderStartHarness(initialBoard: BoardData = createBoard()): Promise<{
+		snapshot: () => HookSnapshot;
+		currentBoard: () => BoardData;
+		startTaskSession: ReturnType<typeof vi.fn>;
+	}> {
+		let latestSnapshot: HookSnapshot | null = null;
+		let boardState = initialBoard;
+		const startTaskSession = vi.fn(async () => ({ ok: true as const }));
+		const ensureTaskWorkspace = vi.fn(async () => ({
+			ok: true as const,
+			response: { ok: true as const, path: "/tmp/task-1", baseRef: "main", baseCommit: "abc123" },
+		}));
+		function StatefulHarness(): React.ReactElement {
+			const [board, setBoard] = useState<BoardData>(boardState);
+			boardState = board;
+			return (
+				<HookHarness
+					board={board}
+					setBoard={setBoard}
+					ensureTaskWorkspace={ensureTaskWorkspace}
+					startTaskSession={startTaskSession}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>
+			);
+		}
+		await act(async () => {
+			root.render(<StatefulHarness />);
+		});
+		return {
+			snapshot: () => {
+				if (!latestSnapshot) {
+					throw new Error("Expected a hook snapshot.");
+				}
+				return latestSnapshot;
+			},
+			currentBoard: () => boardState,
+			startTaskSession,
+		};
+	}
+
+	const columnIdOf = (board: BoardData, taskId: string) =>
+		board.columns.find((column) => column.cards.some((card) => card.id === taskId))?.id;
+
+	it("still starts the task when its animated Start move is cancelled", async () => {
+		mockProgrammaticCardMoves(() => "started");
+		const harness = await renderStartHarness();
+
+		await act(async () => {
+			harness.snapshot().handleStartTask("task-1");
+		});
+		expect(harness.startTaskSession).not.toHaveBeenCalled();
+
+		await act(async () => {
+			harness.snapshot().handleDragEnd({
+				draggableId: "task-1",
+				type: "CARD",
+				source: { droppableId: "backlog", index: 0 },
+				destination: null,
+				combine: null,
+				mode: "FLUID",
+				reason: "CANCEL",
+			});
+		});
+
+		expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
+		expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("in_progress");
+	});
+
+	it("ignores a late drop for a card already moved instead of moving the card now in its slot", async () => {
+		mockProgrammaticCardMoves(() => "started");
+		const board = createBoard();
+		board.columns[0]!.cards.push(createTask("task-2", "Second backlog task", 2));
+		const harness = await renderStartHarness(board);
+		const drop: DropResult = {
+			draggableId: "task-1",
+			type: "CARD",
+			source: { droppableId: "backlog", index: 0 },
+			destination: { droppableId: "in_progress", index: 0 },
+			combine: null,
+			mode: "FLUID",
+			reason: "DROP",
+		};
+
+		await act(async () => {
+			harness.snapshot().handleStartTask("task-1");
+		});
+		await act(async () => {
+			harness.snapshot().handleDragEnd(drop);
+		});
+		await act(async () => {
+			harness.snapshot().handleDragEnd(drop);
+		});
+
+		expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
+		expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("in_progress");
+		expect(columnIdOf(harness.currentBoard(), "task-2")).toBe("backlog");
+	});
+
+	it("gives up animating a Start that stays blocked and starts the task directly", async () => {
+		const tryProgrammaticCardMove = vi.fn(() => "blocked" as const);
+		mockProgrammaticCardMoves(tryProgrammaticCardMove);
+		const harness = await renderStartHarness();
+
+		await act(async () => {
+			harness.snapshot().handleStartTask("task-1");
+		});
+
+		expect(tryProgrammaticCardMove).toHaveBeenCalledTimes(4);
+		expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
+		expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("in_progress");
 	});
 });

@@ -5,7 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { notifyError, showAppToast } from "@/components/app-toaster";
 import type { TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
 import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
-import { useProgrammaticCardMoves } from "@/hooks/use-programmatic-card-moves";
+import {
+	MAX_PROGRAMMATIC_CARD_MOVE_BLOCKED_RETRIES,
+	useProgrammaticCardMoves,
+} from "@/hooks/use-programmatic-card-moves";
 import { useReviewAutoActions } from "@/hooks/use-review-auto-actions";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
 import type { RuntimeTaskSessionSummary, RuntimeTaskWorkspaceInfoResponse } from "@/runtime/types";
@@ -396,8 +399,8 @@ export function useBoardInteractions({
 		[board, kickoffTaskInProgress, setBoard],
 	);
 
-	const startBacklogTaskWithAnimation = useCallback(
-		async (task: BoardCard): Promise<boolean> => {
+	const startBacklogTaskWithAnimationAttempt = useCallback(
+		async (task: BoardCard, blockedRetries: number): Promise<boolean> => {
 			if (selectedCard) {
 				return startBacklogTaskImmediately(task);
 			}
@@ -406,8 +409,11 @@ export function useBoardInteractions({
 
 			const programmaticMoveAttempt = tryProgrammaticCardMove(task.id, "backlog", "in_progress");
 			if (programmaticMoveAttempt === "blocked") {
+				if (blockedRetries >= MAX_PROGRAMMATIC_CARD_MOVE_BLOCKED_RETRIES) {
+					return startBacklogTaskImmediately(task);
+				}
 				await waitForProgrammaticCardMoveAvailability();
-				return startBacklogTaskWithAnimation(task);
+				return startBacklogTaskWithAnimationAttempt(task, blockedRetries + 1);
 			}
 			if (programmaticMoveAttempt === "unavailable") {
 				return kickoffTaskInProgress(task, task.id, "backlog", {
@@ -440,6 +446,11 @@ export function useBoardInteractions({
 			waitForBacklogCardHeightToSettle,
 			waitForProgrammaticCardMoveAvailability,
 		],
+	);
+
+	const startBacklogTaskWithAnimation = useCallback(
+		(task: BoardCard): Promise<boolean> => startBacklogTaskWithAnimationAttempt(task, 0),
+		[startBacklogTaskWithAnimationAttempt],
 	);
 
 	useEffect(() => {
@@ -634,8 +645,24 @@ export function useBoardInteractions({
 
 			const moveEvent = applied.moveEvent;
 			if (!moveEvent) {
-				resolvePendingProgrammaticStartMove(result.draggableId, false);
 				setBoard(applied.board);
+				// A Start whose animated move did not reach In Progress (cancelled, or refused by
+				// the drag rules) still has to start the task: the user clicked Start, not a drag.
+				const pendingStartTask =
+					pendingProgrammaticStartMoveCompletionByTaskIdRef.current[result.draggableId] !== undefined
+						? findCardSelection(applied.board, result.draggableId)
+						: null;
+				if (pendingStartTask?.column.id === "backlog") {
+					void startBacklogTaskImmediately(pendingStartTask.card)
+						.then((started) => {
+							resolvePendingProgrammaticStartMove(result.draggableId, started);
+						})
+						.catch(() => {
+							resolvePendingProgrammaticStartMove(result.draggableId, false);
+						});
+					return;
+				}
+				resolvePendingProgrammaticStartMove(result.draggableId, false);
 				return;
 			}
 
@@ -700,6 +727,7 @@ export function useBoardInteractions({
 			resolvePendingProgrammaticTrashMove,
 			setBoard,
 			setSelectedTaskId,
+			startBacklogTaskImmediately,
 		],
 	);
 
