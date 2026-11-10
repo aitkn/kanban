@@ -1,9 +1,11 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import type { PrerequisiteContext } from "@runtime-task-prerequisites";
 import pLimit from "p-limit";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { notifyError, showAppToast } from "@/components/app-toaster";
 import type { TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
+import { type BlockedTaskStartGate, useBlockedTaskStartGate } from "@/hooks/use-blocked-task-start-gate";
 import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
 import {
 	MAX_PROGRAMMATIC_CARD_MOVE_BLOCKED_RETRIES,
@@ -85,6 +87,9 @@ interface UseBoardInteractionsInput {
 	readyForReviewNotificationsEnabled: boolean;
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
+	/** sked fork: resolves cross-project refs for the prerequisite rule (`listOpenPrerequisites`). */
+	prerequisites: PrerequisiteContext;
+	startCrossProjectDependents: UseTaskSessionsResult["startCrossProjectDependents"];
 }
 
 export interface UseBoardInteractionsResult {
@@ -107,6 +112,8 @@ export interface UseBoardInteractionsResult {
 	handleSendReviewComments: (taskId: string, text: string) => Promise<void>;
 	moveToTrashLoadingById: Record<string, boolean>;
 	trashTaskCount: number;
+	/** sked fork: a manual start of a blocked card, waiting for "Start anyway". */
+	blockedTaskStart: Pick<BlockedTaskStartGate, "pending" | "confirm" | "cancel">;
 }
 
 export function useBoardInteractions({
@@ -129,6 +136,8 @@ export function useBoardInteractions({
 	readyForReviewNotificationsEnabled,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
+	prerequisites,
+	startCrossProjectDependents,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
 	const previousSessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>({});
 	const notificationPermissionPromptInFlightRef = useRef(false);
@@ -562,7 +571,24 @@ export function useBoardInteractions({
 			kickoffTaskInProgress,
 			startBacklogTaskWithAnimation,
 			waitForBacklogStartAnimationAvailability: waitForProgrammaticCardMoveAvailability,
+			prerequisites,
+			startCrossProjectDependents,
 		});
+
+	const startBacklogTaskManually = useCallback(
+		(task: BoardCard) => {
+			maybeRequestNotificationPermissionForTaskStart();
+			void startBacklogTaskWithAnimation(task);
+		},
+		[maybeRequestNotificationPermissionForTaskStart, startBacklogTaskWithAnimation],
+	);
+	// sked fork: a manual start of a card whose prerequisites are not all done asks first.
+	const blockedTaskStartGate = useBlockedTaskStartGate({
+		board,
+		prerequisites,
+		startTask: startBacklogTaskManually,
+	});
+	const { isBlocked: isTaskStartBlocked, requestStart: requestTaskStart } = blockedTaskStartGate;
 
 	useEffect(() => {
 		setRequestMoveTaskToTrashHandler(requestMoveTaskToTrash);
@@ -692,6 +718,19 @@ export function useBoardInteractions({
 				return;
 			}
 
+			// sked fork: a card dragged by hand into In Progress while it is blocked stays in Backlog
+			// until the user confirms. Animated moves (Start, auto-start) were already decided.
+			if (
+				moveEvent.toColumnId === "in_progress" &&
+				moveEvent.fromColumnId === "backlog" &&
+				!programmaticCardMoveInFlight &&
+				pendingProgrammaticStartMoveCompletionByTaskIdRef.current[moveEvent.taskId] === undefined &&
+				isTaskStartBlocked(moveEvent.taskId)
+			) {
+				requestTaskStart(moveEvent.taskId);
+				return;
+			}
+
 			setBoard(applied.board);
 
 			if (
@@ -725,23 +764,15 @@ export function useBoardInteractions({
 			resumeTaskFromTrash,
 			resolvePendingProgrammaticStartMove,
 			resolvePendingProgrammaticTrashMove,
+			isTaskStartBlocked,
+			requestTaskStart,
 			setBoard,
 			setSelectedTaskId,
 			startBacklogTaskImmediately,
 		],
 	);
 
-	const handleStartTask = useCallback(
-		(taskId: string) => {
-			const selection = findCardSelection(board, taskId);
-			if (!selection || selection.column.id !== "backlog") {
-				return;
-			}
-			maybeRequestNotificationPermissionForTaskStart();
-			void startBacklogTaskWithAnimation(selection.card);
-		},
-		[board, maybeRequestNotificationPermissionForTaskStart, startBacklogTaskWithAnimation],
-	);
+	const handleStartTask = requestTaskStart;
 
 	const handleStartAllBacklogTasks = useCallback(
 		(taskIds?: string[]) => {
@@ -967,5 +998,10 @@ export function useBoardInteractions({
 		handleSendReviewComments,
 		moveToTrashLoadingById,
 		trashTaskCount,
+		blockedTaskStart: {
+			pending: blockedTaskStartGate.pending,
+			confirm: blockedTaskStartGate.confirm,
+			cancel: blockedTaskStartGate.cancel,
+		},
 	};
 }

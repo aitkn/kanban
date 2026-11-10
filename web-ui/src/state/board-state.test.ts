@@ -1,3 +1,4 @@
+import { NO_CROSS_PROJECT_TASKS } from "@runtime-task-prerequisites";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createInitialBoardData } from "@/data/board-data";
@@ -51,6 +52,8 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
+
+const SAME_BOARD_ONLY = { lookupCrossProjectTask: NO_CROSS_PROJECT_TASKS };
 
 describe("board dependency state", () => {
 	it("creates tasks when randomUUID is unavailable", () => {
@@ -156,12 +159,12 @@ describe("board dependency state", () => {
 		expect(dependencyB.added).toBe(true);
 
 		// C waits on both A and B, so it only unlocks once the last of them is done.
-		const moveATrash = trashTaskAndGetReadyLinkedTaskIds(dependencyB.board, taskA);
+		const moveATrash = trashTaskAndGetReadyLinkedTaskIds(dependencyB.board, taskA, SAME_BOARD_ONLY);
 		expect(moveATrash.moved).toBe(true);
 		expect(moveATrash.board.dependencies).toHaveLength(1);
 		expect(moveATrash.readyTaskIds).toEqual([]);
 
-		const moveBTrash = trashTaskAndGetReadyLinkedTaskIds(moveATrash.board, taskB);
+		const moveBTrash = trashTaskAndGetReadyLinkedTaskIds(moveATrash.board, taskB, SAME_BOARD_ONLY);
 		expect(moveBTrash.moved).toBe(true);
 		expect(moveBTrash.readyTaskIds).toEqual([taskC]);
 	});
@@ -178,7 +181,7 @@ describe("board dependency state", () => {
 		const linkB = addTaskDependency(linkA.board, taskC, taskB);
 		const linkD = addTaskDependency(linkB.board, taskC, taskD);
 
-		expect(getPendingPrerequisiteCountByTaskId(linkD.board)).toEqual({ [taskC]: 3, [taskD]: 0 });
+		expect(getPendingPrerequisiteCountByTaskId(linkD.board, SAME_BOARD_ONLY)).toEqual({ [taskC]: 3, [taskD]: 0 });
 	});
 
 	it("does not unlock backlog cards when an in-progress card is trashed", () => {
@@ -191,7 +194,7 @@ describe("board dependency state", () => {
 		const linked = addTaskDependency(movedA.board, taskA, taskB);
 		expect(linked.added).toBe(true);
 
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(linked.board, taskA);
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(linked.board, taskA, SAME_BOARD_ONLY);
 		expect(trashed.readyTaskIds).toEqual([]);
 		expect(trashed.board.dependencies).toEqual([]);
 	});
@@ -239,10 +242,10 @@ describe("board dependency state", () => {
 		const firstLink = addTaskDependency(movedB.board, taskC, taskA);
 		const secondLink = addTaskDependency(firstLink.board, taskC, taskB);
 
-		const trashA = trashTaskAndGetReadyLinkedTaskIds(secondLink.board, taskA);
+		const trashA = trashTaskAndGetReadyLinkedTaskIds(secondLink.board, taskA, SAME_BOARD_ONLY);
 		expect(trashA.readyTaskIds).toEqual([]);
 
-		const trashB = trashTaskAndGetReadyLinkedTaskIds(trashA.board, taskB);
+		const trashB = trashTaskAndGetReadyLinkedTaskIds(trashA.board, taskB, SAME_BOARD_ONLY);
 		expect(trashB.readyTaskIds).toEqual([taskC]);
 
 		const autoStarted = moveTaskToColumn(trashB.board, taskC, "in_progress");

@@ -8,6 +8,7 @@ import {
 	type SensorAPI,
 	type SnapDragActions,
 } from "@hello-pangea/dnd";
+import { NO_CROSS_PROJECT_TASKS, type PrerequisiteContext } from "@runtime-task-prerequisites";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardColumn } from "@/components/board-column";
@@ -35,6 +36,8 @@ function isRectVerticallyVisibleWithinContainer(rect: DOMRect, containerRect: DO
 	return rect.top >= containerRect.top && rect.bottom <= containerRect.bottom;
 }
 
+const SAME_BOARD_PREREQUISITES: PrerequisiteContext = { lookupCrossProjectTask: NO_CROSS_PROJECT_TASKS };
+
 export function KanbanBoard({
 	data,
 	taskSessions,
@@ -47,6 +50,7 @@ export function KanbanBoard({
 	inlineTaskEditor,
 	onEditTask,
 	crossProjectTaskReferences,
+	prerequisites = SAME_BOARD_PREREQUISITES,
 	onSaveTaskTitle,
 	onCommitTask,
 	onOpenPrTask,
@@ -76,6 +80,8 @@ export function KanbanBoard({
 	onEditTask?: (card: BoardCard) => void;
 	/** sked fork: resolves and opens prerequisite chips on other projects' boards. */
 	crossProjectTaskReferences?: CrossProjectTaskReferences;
+	/** sked fork: resolves cross-project refs, so a card's blocked badge counts them too. */
+	prerequisites?: PrerequisiteContext;
 	onSaveTaskTitle?: (taskId: string, title: string) => void;
 	onCommitTask?: (taskId: string) => void;
 	onOpenPrTask?: (taskId: string) => void;
@@ -114,7 +120,10 @@ export function KanbanBoard({
 		latestDataRef.current = data;
 	}, [data]);
 
-	const pendingPrerequisiteCountByTaskId = useMemo(() => getPendingPrerequisiteCountByTaskId(data), [data]);
+	const pendingPrerequisiteCountByTaskId = useMemo(
+		() => getPendingPrerequisiteCountByTaskId(data, prerequisites),
+		[data, prerequisites],
+	);
 	// sked fork: lets each card's prerequisite chips resolve and open the cards they name.
 	const taskReferences = useTaskReferenceNavigation({
 		columns: data.columns,

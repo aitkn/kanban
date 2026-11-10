@@ -1,5 +1,6 @@
 // sked fork: `kanban task link|unlink` for a prerequisite on another project's board. The ref lives
-// only in the waiting card's `dependsOn`: it is display-only and never auto-starts anything.
+// only in the waiting card's `dependsOn`, never in `board.dependencies`; it still blocks the card and
+// starts it (`src/core/task-prerequisites.ts`, `src/server/cross-project-auto-start.ts`).
 
 import type { RuntimeTaskDependsOnRef } from "../core/api-contract";
 import { formatProjectTaskRef, resolveProjectShortNames } from "../core/project-short-name";

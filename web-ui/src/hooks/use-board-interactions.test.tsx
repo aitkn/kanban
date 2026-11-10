@@ -1,4 +1,5 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import { NO_CROSS_PROJECT_TASKS, type PrerequisiteContext } from "@runtime-task-prerequisites";
 import { act, type Dispatch, type SetStateAction, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,6 +68,8 @@ const NOOP_CLEANUP_WORKSPACE = async (): Promise<null> => null;
 const NOOP_FETCH_WORKSPACE_INFO = async (): Promise<null> => null;
 const NOOP_SEND_TASK_INPUT = async (): Promise<{ ok: boolean }> => ({ ok: true });
 const NOOP_RUN_AUTO_REVIEW = async (): Promise<boolean> => false;
+const NOOP_CROSS_PROJECT_AUTO_START = async (): Promise<null> => null;
+const SAME_BOARD_ONLY: PrerequisiteContext = { lookupCrossProjectTask: NO_CROSS_PROJECT_TASKS };
 
 interface HookSnapshot {
 	handleDragEnd: (result: DropResult) => void;
@@ -74,6 +77,7 @@ interface HookSnapshot {
 	handleStartTask: (taskId: string) => void;
 	handleCardSelect: (taskId: string) => void;
 	handleConfirmClearTrash: () => void;
+	blockedTaskStart: ReturnType<typeof useBoardInteractions>["blockedTaskStart"];
 }
 
 function createRect(width: number, height: number): DOMRect {
@@ -101,6 +105,7 @@ function HookHarness({
 	setSelectedTaskIdOverride,
 	onSnapshot,
 	initialSessions,
+	prerequisites = SAME_BOARD_ONLY,
 }: {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
@@ -112,6 +117,7 @@ function HookHarness({
 	setSelectedTaskIdOverride?: Dispatch<SetStateAction<string | null>>;
 	onSnapshot?: (snapshot: HookSnapshot) => void;
 	initialSessions?: Record<string, RuntimeTaskSessionSummary>;
+	prerequisites?: PrerequisiteContext;
 }): null {
 	const [sessions, setSessions] = useState<Record<string, RuntimeTaskSessionSummary>>(initialSessions ?? {});
 	const [, setSelectedTaskId] = useState<string | null>(null);
@@ -138,6 +144,8 @@ function HookHarness({
 		readyForReviewNotificationsEnabled: false,
 		taskGitActionLoadingByTaskId: {},
 		runAutoReviewGitAction: NOOP_RUN_AUTO_REVIEW,
+		prerequisites,
+		startCrossProjectDependents: NOOP_CROSS_PROJECT_AUTO_START,
 	});
 
 	useEffect(() => {
@@ -147,8 +155,10 @@ function HookHarness({
 			handleStartTask: actions.handleStartTask,
 			handleCardSelect: actions.handleCardSelect,
 			handleConfirmClearTrash: actions.handleConfirmClearTrash,
+			blockedTaskStart: actions.blockedTaskStart,
 		});
 	}, [
+		actions.blockedTaskStart,
 		actions.handleCardSelect,
 		actions.handleConfirmClearTrash,
 		actions.handleDragEnd,
@@ -865,7 +875,10 @@ describe("useBoardInteractions", () => {
 		});
 	}
 
-	async function renderStartHarness(initialBoard: BoardData = createBoard()): Promise<{
+	async function renderStartHarness(
+		initialBoard: BoardData = createBoard(),
+		prerequisites: PrerequisiteContext = SAME_BOARD_ONLY,
+	): Promise<{
 		snapshot: () => HookSnapshot;
 		currentBoard: () => BoardData;
 		startTaskSession: ReturnType<typeof vi.fn>;
@@ -886,6 +899,7 @@ describe("useBoardInteractions", () => {
 					setBoard={setBoard}
 					ensureTaskWorkspace={ensureTaskWorkspace}
 					startTaskSession={startTaskSession}
+					prerequisites={prerequisites}
 					onSnapshot={(snapshot) => {
 						latestSnapshot = snapshot;
 					}}
@@ -977,5 +991,111 @@ describe("useBoardInteractions", () => {
 		expect(tryProgrammaticCardMove).toHaveBeenCalledTimes(4);
 		expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
 		expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("in_progress");
+	});
+
+	describe("sked fork: starting a blocked card by hand", () => {
+		const DB_REF = { taskId: "db001", projectId: "skedai-db" };
+		const dbTaskIn = (columnId: "in_progress" | "trash"): PrerequisiteContext => ({
+			lookupCrossProjectTask: (projectId, taskId) =>
+				projectId === DB_REF.projectId && taskId === DB_REF.taskId ? { columnId, title: "Migrate schema" } : null,
+		});
+		const blockedBoard = (): BoardData => {
+			const board = createBoard();
+			board.columns[0]!.cards[0] = { ...createTask("task-1", "Backlog task", 1), dependsOn: [DB_REF] };
+			return board;
+		};
+		const dropIntoInProgress: DropResult = {
+			draggableId: "task-1",
+			type: "CARD",
+			source: { droppableId: "backlog", index: 0 },
+			destination: { droppableId: "in_progress", index: 0 },
+			combine: null,
+			mode: "FLUID",
+			reason: "DROP",
+		};
+
+		it("asks before the Start button starts a blocked card, and starts it on Start anyway", async () => {
+			mockProgrammaticCardMoves(() => "unavailable");
+			const harness = await renderStartHarness(blockedBoard(), dbTaskIn("in_progress"));
+
+			await act(async () => {
+				harness.snapshot().handleStartTask("task-1");
+			});
+			expect(harness.startTaskSession).not.toHaveBeenCalled();
+			expect(harness.snapshot().blockedTaskStart.pending).toMatchObject({
+				task: { id: "task-1" },
+				openPrerequisites: [{ taskId: "db001", projectId: "skedai-db", columnId: "in_progress" }],
+			});
+
+			await act(async () => {
+				harness.snapshot().blockedTaskStart.confirm();
+			});
+			expect(harness.snapshot().blockedTaskStart.pending).toBeNull();
+			expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
+			expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("in_progress");
+		});
+
+		it("starts nothing when the user cancels", async () => {
+			mockProgrammaticCardMoves(() => "unavailable");
+			const harness = await renderStartHarness(blockedBoard(), dbTaskIn("in_progress"));
+
+			await act(async () => {
+				harness.snapshot().handleStartTask("task-1");
+			});
+			await act(async () => {
+				harness.snapshot().blockedTaskStart.cancel();
+			});
+			expect(harness.snapshot().blockedTaskStart.pending).toBeNull();
+			expect(harness.startTaskSession).not.toHaveBeenCalled();
+			expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("backlog");
+		});
+
+		it("starts at once without asking when the cross-project prerequisite is done", async () => {
+			mockProgrammaticCardMoves(() => "unavailable");
+			const harness = await renderStartHarness(blockedBoard(), dbTaskIn("trash"));
+
+			await act(async () => {
+				harness.snapshot().handleStartTask("task-1");
+			});
+			expect(harness.snapshot().blockedTaskStart.pending).toBeNull();
+			expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
+		});
+
+		it("keeps a blocked card dragged into In Progress in Backlog until Start anyway", async () => {
+			mockProgrammaticCardMoves(() => "unavailable");
+			const harness = await renderStartHarness(blockedBoard(), dbTaskIn("in_progress"));
+
+			await act(async () => {
+				harness.snapshot().handleDragEnd(dropIntoInProgress);
+			});
+			expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("backlog");
+			expect(harness.startTaskSession).not.toHaveBeenCalled();
+			expect(harness.snapshot().blockedTaskStart.pending?.task.id).toBe("task-1");
+
+			await act(async () => {
+				harness.snapshot().blockedTaskStart.confirm();
+			});
+			expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
+			expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("in_progress");
+		});
+
+		it("does not ask again when the confirmed Start's animated move lands", async () => {
+			mockProgrammaticCardMoves(() => "started");
+			const harness = await renderStartHarness(blockedBoard(), dbTaskIn("in_progress"));
+
+			await act(async () => {
+				harness.snapshot().handleStartTask("task-1");
+			});
+			await act(async () => {
+				harness.snapshot().blockedTaskStart.confirm();
+			});
+			// The animation is running; its drop is the confirmed start, not a new drag.
+			await act(async () => {
+				harness.snapshot().handleDragEnd(dropIntoInProgress);
+			});
+			expect(harness.snapshot().blockedTaskStart.pending).toBeNull();
+			expect(harness.startTaskSession).toHaveBeenCalledTimes(1);
+			expect(columnIdOf(harness.currentBoard(), "task-1")).toBe("in_progress");
+		});
 	});
 });

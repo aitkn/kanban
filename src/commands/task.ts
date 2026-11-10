@@ -7,11 +7,12 @@ import type {
 	RuntimeBoardColumnId,
 	RuntimeBoardDependency,
 	RuntimeClineReasoningEffort,
+	RuntimeCrossProjectAutoStartResponse,
 	RuntimeTaskClineSettings,
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { runtimeAgentIdSchema, runtimeClineReasoningEffortSchema } from "../core/api-contract";
-import { resolveProjectShortNames } from "../core/project-short-name";
+import { formatProjectTaskRef, resolveProjectShortNames } from "../core/project-short-name";
 import { buildKanbanRuntimeUrl, getKanbanRuntimeOrigin, getRuntimeFetch } from "../core/runtime-endpoint";
 import {
 	addTaskDependency,
@@ -25,6 +26,13 @@ import {
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
 } from "../core/task-board-mutations";
+import {
+	createCrossProjectTaskLookup,
+	isPrerequisiteFinishingMove,
+	listOpenPrerequisites,
+	type OpenPrerequisite,
+	type PrerequisiteContext,
+} from "../core/task-prerequisites";
 import { resolveProjectInputPath } from "../projects/project-path";
 import { listWorkspaceIndexEntries, loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import type { RuntimeAppRouter } from "../trpc/app-router";
@@ -56,6 +64,20 @@ interface RuntimeWorkspaceMutationResult<T> {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+/** A command failure that carries structured detail into the JSON error output. */
+class TaskCommandError extends Error {
+	constructor(
+		message: string,
+		readonly details: JsonRecord,
+	) {
+		super(message);
+		this.name = "TaskCommandError";
+	}
+}
+
+/** sked fork: `task start` refused a card whose prerequisites are not all done. */
+class BlockedTaskStartError extends TaskCommandError {}
 
 function toErrorMessage(error: unknown): string {
 	if (error instanceof Error && error.message.trim().length > 0) {
@@ -354,6 +376,31 @@ function findTaskRecord(
 // sked fork: every task record shows cross-project refs with the same short names as `task list`.
 async function loadProjectShortNames(): Promise<Map<string, string>> {
 	return resolveProjectShortNames(await listWorkspaceIndexEntries());
+}
+
+/**
+ * sked fork: what `listOpenPrerequisites` needs for a board read through the runtime: the live columns
+ * of cross-project refs (from the project list) and this board's live sessions.
+ */
+async function loadPrerequisiteContext(
+	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>,
+	sessions: RuntimeWorkspaceStateResponse["sessions"],
+): Promise<PrerequisiteContext> {
+	const { projects } = await runtimeClient.projects.list.query();
+	return { lookupCrossProjectTask: createCrossProjectTaskLookup(projects), sessions };
+}
+
+function formatOpenPrerequisites(
+	prerequisites: readonly OpenPrerequisite[],
+	projectShortNames: ReadonlyMap<string, string>,
+): JsonRecord[] {
+	return prerequisites.map((prerequisite) => ({
+		ref: formatProjectTaskRef(prerequisite, projectShortNames),
+		taskId: prerequisite.taskId,
+		...(prerequisite.projectId !== undefined ? { projectId: prerequisite.projectId } : {}),
+		column: prerequisite.columnId,
+		title: prerequisite.title,
+	}));
 }
 
 function formatTaskRecord(
@@ -725,7 +772,13 @@ async function unlinkTaskPrerequisite(input: {
 	};
 }
 
-async function startTask(input: { cwd: string; taskId: string; projectPath?: string }): Promise<JsonRecord> {
+async function startTask(input: {
+	cwd: string;
+	taskId: string;
+	projectPath?: string;
+	/** sked fork: start a backlog card even while its prerequisites are open. Auto-start never sets it. */
+	force?: boolean;
+}): Promise<JsonRecord> {
 	const workspaceRepoPath = await resolveWorkspaceRepoPath(input.projectPath, input.cwd);
 	const workspaceId = await ensureRuntimeWorkspace(workspaceRepoPath);
 	const runtimeClient = createRuntimeTrpcClient(workspaceId);
@@ -745,6 +798,21 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 	const task = currentRecord?.task;
 	if (!task) {
 		throw new Error(`Task "${input.taskId}" could not be resolved.`);
+	}
+
+	if (fromColumnId === "backlog" && !input.force) {
+		const openPrerequisites = listOpenPrerequisites(
+			runtimeState.board,
+			task.id,
+			await loadPrerequisiteContext(runtimeClient, runtimeState.sessions),
+		);
+		if (openPrerequisites.length > 0) {
+			const refs = formatOpenPrerequisites(openPrerequisites, await loadProjectShortNames());
+			throw new BlockedTaskStartError(
+				`Task "${task.id}" is blocked: ${refs.length === 1 ? "1 prerequisite is" : `${refs.length} prerequisites are`} not done (${refs.map((ref) => `${String(ref.ref)} in ${String(ref.column)}`).join(", ")}). Pass --force to start it anyway.`,
+				{ taskId: task.id, openPrerequisites: refs },
+			);
+		}
 	}
 
 	const existingSession = runtimeState.sessions[task.id] ?? null;
@@ -820,6 +888,8 @@ interface TrashTaskExecutionResult {
 	previousColumnId: ListTaskColumn;
 	readyTaskIds: string[];
 	autoStartedTasks: JsonRecord[];
+	/** sked fork: cards on other projects' boards the runtime started; null when this was no Review -> Done move. */
+	crossProjectAutoStart: RuntimeCrossProjectAutoStartResponse | null;
 	worktreeDeleted: boolean;
 	worktreeDeleteError?: string;
 	alreadyInTrash: boolean;
@@ -844,6 +914,9 @@ async function trashTaskById(input: {
 	runtimeClient: ReturnType<typeof createRuntimeTrpcClient>;
 }): Promise<TrashTaskExecutionResult> {
 	const projectShortNames = await loadProjectShortNames();
+	// sked fork: a waiting card starts only once nothing blocks it, cross-project refs included.
+	const runtimeState = await input.runtimeClient.workspace.getState.query();
+	const prerequisites = await loadPrerequisiteContext(input.runtimeClient, runtimeState.sessions);
 	const mutation = await mutateWorkspaceState<TrashTaskMutationValue>(input.workspaceRepoPath, (latestState) => {
 		const latestRecord = findTaskRecord(latestState, input.taskId);
 		if (!latestRecord) {
@@ -862,7 +935,7 @@ async function trashTaskById(input: {
 			};
 		}
 
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(latestState.board, input.taskId);
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(latestState.board, input.taskId, prerequisites);
 		if (!trashed.moved || !trashed.task) {
 			throw new Error(`Task "${input.taskId}" could not be moved to done.`);
 		}
@@ -893,6 +966,7 @@ async function trashTaskById(input: {
 			previousColumnId: mutation.value.previousColumnId,
 			readyTaskIds: [],
 			autoStartedTasks: [],
+			crossProjectAutoStart: null,
 			worktreeDeleted: false,
 			alreadyInTrash: true,
 		};
@@ -904,13 +978,29 @@ async function trashTaskById(input: {
 
 	const autoStartedTasks: JsonRecord[] = [];
 	for (const readyTaskId of mutation.value.readyTaskIds) {
-		const started = await startTask({
-			cwd: input.cwd,
-			taskId: readyTaskId,
-			projectPath: input.projectPath,
-		});
-		autoStartedTasks.push(started);
+		try {
+			autoStartedTasks.push(
+				await startTask({
+					cwd: input.cwd,
+					taskId: readyTaskId,
+					projectPath: input.projectPath,
+				}),
+			);
+		} catch (error) {
+			// Something else on its boards reopened since the check above; auto-start never overrides.
+			if (!(error instanceof BlockedTaskStartError)) {
+				throw error;
+			}
+			autoStartedTasks.push({ ok: false, error: error.message, ...error.details });
+		}
 	}
+
+	// sked fork: cards on other projects' boards waiting on this one are started by the runtime.
+	const crossProjectAutoStart = isPrerequisiteFinishingMove(mutation.value.previousColumnId)
+		? await input.runtimeClient.runtime.startCrossProjectDependents
+				.mutate({ taskId: input.taskId })
+				.catch((error: unknown) => ({ ok: false, startedTasks: [], failedTasks: [], error: toErrorMessage(error) }))
+		: null;
 
 	const deletedWorkspace = await deleteTaskWorkspace(input.runtimeClient, input.taskId);
 
@@ -920,9 +1010,21 @@ async function trashTaskById(input: {
 		previousColumnId: mutation.value.previousColumnId,
 		readyTaskIds: mutation.value.readyTaskIds,
 		autoStartedTasks,
+		crossProjectAutoStart,
 		worktreeDeleted: deletedWorkspace.removed,
 		worktreeDeleteError: deletedWorkspace.error,
 		alreadyInTrash: false,
+	};
+}
+
+/** sked fork: `task done` output for the cards the runtime started on other projects' boards. */
+function formatCrossProjectAutoStart(results: readonly TrashTaskExecutionResult[]): JsonRecord {
+	const responses = results.flatMap((result) => (result.crossProjectAutoStart ? [result.crossProjectAutoStart] : []));
+	const errors = responses.flatMap((response) => (response.error ? [response.error] : []));
+	return {
+		crossProjectAutoStartedTasks: responses.flatMap((response) => response.startedTasks),
+		crossProjectAutoStartFailedTasks: responses.flatMap((response) => response.failedTasks),
+		...(errors.length > 0 ? { crossProjectAutoStartErrors: errors } : {}),
 	};
 }
 
@@ -961,6 +1063,7 @@ async function trashTask(input: {
 			workspacePath: workspaceRepoPath,
 			readyTaskIds: trashed.readyTaskIds,
 			autoStartedTasks: trashed.autoStartedTasks,
+			...formatCrossProjectAutoStart([trashed]),
 			worktreeDeleted: trashed.worktreeDeleted,
 			worktreeDeleteError: trashed.worktreeDeleteError,
 		};
@@ -1006,6 +1109,7 @@ async function trashTask(input: {
 		alreadyTrashedTasks: alreadyTrashedTasks.map((result) => result.task),
 		readyTaskIds: [...new Set(trashedTasks.flatMap((result) => result.readyTaskIds))],
 		autoStartedTasks: trashedTasks.flatMap((result) => result.autoStartedTasks),
+		...formatCrossProjectAutoStart(trashedTasks),
 		worktreeCleanup: trashedTasks.map((result) => ({
 			taskId: result.taskId,
 			removed: result.worktreeDeleted,
@@ -1144,6 +1248,7 @@ async function runTaskCommand(handler: () => Promise<JsonRecord>): Promise<void>
 		printJson({
 			ok: false,
 			error: `Task command failed at ${getKanbanRuntimeOrigin()}: ${toErrorMessage(error)}`,
+			...(error instanceof TaskCommandError ? error.details : {}),
 		});
 		process.exitCode = 1;
 	}
@@ -1344,7 +1449,7 @@ export function registerTaskCommand(program: Command): void {
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
 		.option(
 			"--linked-project-path <path>",
-			"Path of another project whose task --task-id depends on (a display-only cross-project link).",
+			"Path of another project whose task --task-id depends on (a cross-project link).",
 		)
 		.option("--linked-project-id <id>", "Like --linked-project-path, naming the project by its ID.")
 		.addHelpText(
@@ -1364,8 +1469,11 @@ export function registerTaskCommand(program: Command): void {
 				"Cross-project links:",
 				"  With --linked-project-path (or --linked-project-id), --task-id depends on",
 				"  --linked-task-id on that other project's board. Both projects must be added",
-				"  to Kanban and the linked task must not be done. The link is display-only: it",
-				"  is listed in the task's dependsOn and never auto-starts anything.",
+				"  to Kanban and the linked task must not be done. The link is listed in the",
+				"  task's dependsOn and never reoriented. It blocks --task-id like a same-board",
+				"  link: task start refuses it (unless --force) while the other task is not done,",
+				"  and the runtime starts it when the other task moves from review to done and",
+				"  nothing else it depends on is still open.",
 				"  Remove it with: task unlink --task-id <id> --linked-task-id <id>",
 				"  --linked-project-path <path> (or --linked-project-id <id>).",
 				"",
@@ -1459,13 +1567,26 @@ export function registerTaskCommand(program: Command): void {
 		.description("Start a task session and move task to in_progress.")
 		.requiredOption("--task-id <id>", "Task ID.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
-		.action(async (options: { taskId: string; projectPath?: string }) => {
+		.option("--force", "Start a backlog task even though some of its prerequisites are not done yet.")
+		.addHelpText(
+			"after",
+			[
+				"",
+				"A backlog task whose prerequisites (same-board links and cross-project refs in its",
+				"dependsOn) are not all done is refused with a JSON error listing them under",
+				"openPrerequisites. A prerequisite that was deleted, or whose project was removed",
+				"from Kanban, does not block. --force starts the task anyway.",
+				"",
+			].join("\n"),
+		)
+		.action(async (options: { taskId: string; projectPath?: string; force?: boolean }) => {
 			await runTaskCommand(
 				async () =>
 					await startTask({
 						cwd: process.cwd(),
 						taskId: options.taskId,
 						projectPath: options.projectPath,
+						force: options.force === true,
 					}),
 			);
 		});

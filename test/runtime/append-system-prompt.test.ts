@@ -71,7 +71,10 @@ describe("renderAppendSystemPrompt", () => {
 		expect(rendered).toContain(
 			"kanban task unlink --task-id <task_id> --linked-task-id <other_task_id> (--linked-project-path <other_project_path> | --linked-project-id <other_project_id>)",
 		);
-		expect(rendered).toContain("never auto-starts anything");
+		expect(rendered).not.toContain("never auto-starts anything");
+		expect(rendered).toContain("the runtime starts each backlog task on the other boards that waits on it");
+		expect(rendered).toContain("kanban task start --task-id <task_id> [--project-path <path>] [--force]");
+		expect(rendered).toContain("`openPrerequisites`");
 		expect(rendered).toContain("kanban project short-name (--set <name> | --clear)");
 		expect(rendered).toContain("`db#c64f9`");
 	});

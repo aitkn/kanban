@@ -1035,6 +1035,31 @@ export const runtimeTaskSessionStartResponseSchema = z.object({
 });
 export type RuntimeTaskSessionStartResponse = z.infer<typeof runtimeTaskSessionStartResponseSchema>;
 
+/**
+ * sked fork: a card on the request's project moved from Review to Done. The runtime starts every
+ * backlog card on another project's board that names it in `dependsOn` and is now blocked by nothing.
+ */
+export const runtimeCrossProjectAutoStartRequestSchema = z.object({
+	taskId: z.string(),
+});
+export type RuntimeCrossProjectAutoStartRequest = z.infer<typeof runtimeCrossProjectAutoStartRequestSchema>;
+
+export const runtimeCrossProjectAutoStartedTaskSchema = z.object({
+	projectId: z.string(),
+	taskId: z.string(),
+	title: z.string(),
+});
+export type RuntimeCrossProjectAutoStartedTask = z.infer<typeof runtimeCrossProjectAutoStartedTaskSchema>;
+
+export const runtimeCrossProjectAutoStartResponseSchema = z.object({
+	ok: z.boolean(),
+	startedTasks: z.array(runtimeCrossProjectAutoStartedTaskSchema),
+	/** Cards that were ready but could not be started; each stays in Backlog. */
+	failedTasks: z.array(runtimeCrossProjectAutoStartedTaskSchema.extend({ error: z.string() })),
+	error: z.string().optional(),
+});
+export type RuntimeCrossProjectAutoStartResponse = z.infer<typeof runtimeCrossProjectAutoStartResponseSchema>;
+
 export const runtimeTaskSessionStopRequestSchema = z.object({
 	taskId: z.string(),
 });

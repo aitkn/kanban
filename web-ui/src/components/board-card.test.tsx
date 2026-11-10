@@ -270,24 +270,30 @@ describe("BoardCard", () => {
 		expect(gitActionLabels()).toEqual([]);
 	});
 
-	it("shows how many prerequisites a backlog card is still waiting on when there are several", async () => {
+	it("marks a blocked backlog card with how many prerequisites it still waits on", async () => {
 		await act(async () => {
 			root.render(
 				<TooltipProvider>
 					<BoardCard card={createCard()} index={0} columnId="backlog" pendingPrerequisiteCount={2} />
+					<BoardCard
+						card={createCard({ id: "task-2" })}
+						index={1}
+						columnId="backlog"
+						pendingPrerequisiteCount={1}
+					/>
 				</TooltipProvider>,
 			);
 		});
 
-		const indicator = container.querySelector('[aria-label="Waiting on 2 linked tasks"]');
-		expect(indicator?.textContent).toBe("2");
+		expect(container.querySelector('[aria-label="Blocked: waiting on 2 tasks"]')?.textContent).toBe("2");
+		expect(container.querySelector('[aria-label="Blocked: waiting on 1 task"]')?.textContent).toBe("1");
 	});
 
-	it("hides the prerequisite indicator for a single prerequisite or outside backlog", async () => {
+	it("hides the blocked indicator for an unblocked card or outside backlog", async () => {
 		await act(async () => {
 			root.render(
 				<TooltipProvider>
-					<BoardCard card={createCard()} index={0} columnId="backlog" pendingPrerequisiteCount={1} />
+					<BoardCard card={createCard()} index={0} columnId="backlog" pendingPrerequisiteCount={0} />
 					<BoardCard
 						card={createCard({ id: "task-2" })}
 						index={1}
@@ -298,7 +304,7 @@ describe("BoardCard", () => {
 			);
 		});
 
-		expect(container.querySelector('[aria-label^="Waiting on"]')).toBeNull();
+		expect(container.querySelector('[aria-label^="Blocked"]')).toBeNull();
 	});
 
 	it("shows inline see more and less controls for long descriptions", async () => {

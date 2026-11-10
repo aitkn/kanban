@@ -642,15 +642,15 @@ export function BoardCard({
 								</div>
 								{/* sked fork: the card id, click to copy. */}
 								<TaskIdBadge taskId={card.id} muted={isTrashCard} />
-								{/* sked fork: how many linked tasks a joined backlog card still waits on. */}
-								{columnId === "backlog" && pendingPrerequisiteCount > 1 ? (
+								{/* sked fork: a blocked backlog card shows how many prerequisites (any board) are not done. */}
+								{columnId === "backlog" && pendingPrerequisiteCount > 0 ? (
 									<Tooltip
 										side="bottom"
-										content={`Waiting on ${pendingPrerequisiteCount} linked tasks. Starts automatically once all of them are done.`}
+										content={`Blocked: waiting on ${pendingPrerequisiteCount === 1 ? "1 task" : `${pendingPrerequisiteCount} tasks`} that ${pendingPrerequisiteCount === 1 ? "is" : "are"} not done. Starts automatically when the last of them moves from Review to Done.`}
 									>
 										<span
 											role="img"
-											aria-label={`Waiting on ${pendingPrerequisiteCount} linked tasks`}
+											aria-label={`Blocked: waiting on ${pendingPrerequisiteCount === 1 ? "1 task" : `${pendingPrerequisiteCount} tasks`}`}
 											className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-surface-3 px-1.5 py-0.5 text-xs text-text-secondary"
 										>
 											<Link2 size={12} aria-hidden />

@@ -1,3 +1,4 @@
+import { listOpenPrerequisites, type PrerequisiteContext } from "@runtime-task-prerequisites";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -11,6 +12,7 @@ interface UseTaskStartActionsInput {
 	handleStartTask: (taskId: string) => void;
 	handleStartAllBacklogTasks: (taskIds?: string[]) => void;
 	setSelectedTaskId: Dispatch<SetStateAction<string | null>>;
+	prerequisites: PrerequisiteContext;
 }
 
 export interface UseTaskStartActionsResult {
@@ -21,32 +23,12 @@ export interface UseTaskStartActionsResult {
 	handleStartAllBacklogTasksFromBoard: () => void;
 }
 
-export function getStartableBacklogTaskIds(board: BoardData): string[] {
-	const allBacklogTasks = new Set<string>();
-	const allInProgressTasks = new Set<string>();
-	const startableTaskIds: string[] = [];
-
-	const backlogCards = board.columns.find((column) => column.id === "backlog")?.cards;
-	const inProgressTasks = board.columns.find((column) => column.id === "in_progress")?.cards;
-
-	backlogCards?.forEach((card) => {
-		allBacklogTasks.add(card.id);
-	});
-	inProgressTasks?.forEach((card) => {
-		allInProgressTasks.add(card.id);
-	});
-
-	backlogCards?.forEach((card) => {
-		const dependency = board.dependencies.find((d) => d.fromTaskId === card.id);
-		const isChildTaskInBacklog = dependency && allBacklogTasks.has(dependency.toTaskId);
-		const isChildTaskInProgress = dependency && allInProgressTasks.has(dependency.toTaskId);
-
-		if (!isChildTaskInBacklog && !isChildTaskInProgress) {
-			startableTaskIds.push(card.id);
-		}
-	});
-
-	return startableTaskIds;
+/** sked fork: "Start all" starts only the backlog cards that nothing blocks (`listOpenPrerequisites`). */
+export function getStartableBacklogTaskIds(board: BoardData, prerequisites: PrerequisiteContext): string[] {
+	const backlogCards = board.columns.find((column) => column.id === "backlog")?.cards ?? [];
+	return backlogCards
+		.filter((card) => listOpenPrerequisites(board, card.id, prerequisites).length === 0)
+		.map((card) => card.id);
 }
 
 export function useTaskStartActions({
@@ -56,6 +38,7 @@ export function useTaskStartActions({
 	handleStartTask,
 	handleStartAllBacklogTasks,
 	setSelectedTaskId,
+	prerequisites,
 }: UseTaskStartActionsInput): UseTaskStartActionsResult {
 	const [pendingTaskStartAfterCreateIds, setPendingTaskStartAfterCreateIds] = useState<string[] | null>(null);
 
@@ -96,13 +79,13 @@ export function useTaskStartActions({
 	);
 
 	const handleStartAllBacklogTasksFromBoard = useCallback(() => {
-		const backlogTaskIds = getStartableBacklogTaskIds(board);
+		const backlogTaskIds = getStartableBacklogTaskIds(board, prerequisites);
 
 		if (backlogTaskIds.length === 0) {
 			return;
 		}
 		startBacklogTasks(backlogTaskIds);
-	}, [board, startBacklogTasks]);
+	}, [board, prerequisites, startBacklogTasks]);
 
 	const handleCreateAndStartTask = useCallback(
 		(options?: { keepDialogOpen?: boolean }): string | null => {

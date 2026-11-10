@@ -36,7 +36,7 @@ import {
 	validatePasscode,
 	validateSession,
 } from "../security/passcode-manager";
-import { loadWorkspaceContextById } from "../state/workspace-state";
+import { loadWorkspaceContextById, mutateWorkspaceState } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
@@ -44,7 +44,9 @@ import { createHooksApi } from "../trpc/hooks-api";
 import { createProjectsApi } from "../trpc/projects-api";
 import { createRuntimeApi } from "../trpc/runtime-api";
 import { createWorkspaceApi } from "../trpc/workspace-api";
+import { ensureTaskWorktreeIfDoesntExist } from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
+import { createCrossProjectAutoStarter, moveBacklogTaskToInProgressOnBoard } from "./cross-project-auto-start";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import type { WorkspaceRegistry } from "./workspace-registry";
@@ -198,28 +200,46 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 		broadcastTaskReadyForReview: deps.runtimeStateHub.broadcastTaskReadyForReview,
 	});
 
+	// sked fork: built once, not per request, so concurrent Review -> Done moves start each card once.
+	const crossProjectAutoStarter = createCrossProjectAutoStarter({
+		loadProjectBoards: deps.workspaceRegistry.loadProjectBoards,
+		ensureTaskWorktree: ensureTaskWorktreeIfDoesntExist,
+		moveBacklogTaskToInProgress: async (repoPath, taskId) => {
+			const mutation = await mutateWorkspaceState(repoPath, (state) => {
+				const board = moveBacklogTaskToInProgressOnBoard(state.board, taskId);
+				return board ? { board, value: true } : { board: state.board, value: false, save: false };
+			});
+			return mutation.value;
+		},
+		notifyWorkspaceStateUpdated: (scope) => {
+			void deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath);
+			void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(scope.workspaceId);
+		},
+	});
+
 	const createTrpcContext = async (req: IncomingMessage): Promise<RuntimeTrpcContext> => {
 		const requestUrl = new URL(req.url ?? "/", "http://localhost");
 		const scope = await resolveWorkspaceScopeFromRequest(req, requestUrl);
+		const runtimeApi = createRuntimeApi({
+			getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
+			getActiveRuntimeConfig: deps.workspaceRegistry.getActiveRuntimeConfig,
+			loadScopedRuntimeConfig: deps.workspaceRegistry.loadScopedRuntimeConfig,
+			setActiveRuntimeConfig: deps.workspaceRegistry.setActiveRuntimeConfig,
+			getScopedTerminalManager,
+			getScopedClineTaskSessionService,
+			resolveInteractiveShellCommand: deps.resolveInteractiveShellCommand,
+			runCommand: deps.runCommand,
+			broadcastClineMcpAuthStatusesUpdated: deps.runtimeStateHub.broadcastClineMcpAuthStatusesUpdated,
+			broadcastTaskChatCleared: deps.runtimeStateHub.broadcastTaskChatCleared,
+			bumpClineSessionContextVersion: deps.runtimeStateHub.bumpClineSessionContextVersion,
+			prepareForStateReset,
+			getUpdateStatus: deps.getUpdateStatus,
+			runUpdateNow: deps.runUpdateNow,
+		});
 		return {
 			requestedWorkspaceId: scope.requestedWorkspaceId,
 			workspaceScope: scope.workspaceScope,
-			runtimeApi: createRuntimeApi({
-				getActiveWorkspaceId: deps.workspaceRegistry.getActiveWorkspaceId,
-				getActiveRuntimeConfig: deps.workspaceRegistry.getActiveRuntimeConfig,
-				loadScopedRuntimeConfig: deps.workspaceRegistry.loadScopedRuntimeConfig,
-				setActiveRuntimeConfig: deps.workspaceRegistry.setActiveRuntimeConfig,
-				getScopedTerminalManager,
-				getScopedClineTaskSessionService,
-				resolveInteractiveShellCommand: deps.resolveInteractiveShellCommand,
-				runCommand: deps.runCommand,
-				broadcastClineMcpAuthStatusesUpdated: deps.runtimeStateHub.broadcastClineMcpAuthStatusesUpdated,
-				broadcastTaskChatCleared: deps.runtimeStateHub.broadcastTaskChatCleared,
-				bumpClineSessionContextVersion: deps.runtimeStateHub.bumpClineSessionContextVersion,
-				prepareForStateReset,
-				getUpdateStatus: deps.getUpdateStatus,
-				runUpdateNow: deps.runUpdateNow,
-			}),
+			runtimeApi,
 			workspaceApi: createWorkspaceApi({
 				ensureTerminalManagerForWorkspace: deps.ensureTerminalManagerForWorkspace,
 				getScopedClineTaskSessionService,
@@ -251,6 +271,14 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 				serverCwd: process.cwd(),
 			}),
 			hooksApi,
+			crossProjectApi: {
+				startDependents: async (workspaceScope, input) =>
+					await crossProjectAutoStarter.startDependents({
+						projectId: workspaceScope.workspaceId,
+						taskId: input.taskId,
+						startTaskSession: runtimeApi.startTaskSession,
+					}),
+			},
 		};
 	};
 

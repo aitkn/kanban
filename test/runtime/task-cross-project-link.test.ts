@@ -9,6 +9,9 @@ import {
 	removeCrossProjectPrerequisite,
 	trashTaskAndGetReadyLinkedTaskIds,
 } from "../../src/core/task-board-mutations";
+import { NO_CROSS_PROJECT_TASKS, type PrerequisiteContext } from "../../src/core/task-prerequisites";
+
+const SAME_BOARD_ONLY: PrerequisiteContext = { lookupCrossProjectTask: NO_CROSS_PROJECT_TASKS };
 
 function createBoard(): RuntimeBoardData {
 	const empty: RuntimeBoardData = {
@@ -31,14 +34,19 @@ function dependsOnOf(board: RuntimeBoardData, taskId: string) {
 const DB_TASK = { taskId: "c64f9", projectId: "skedai-db" };
 
 describe("sked fork: cross-project prerequisites", () => {
-	it("records the ref on the waiting card without creating a board link", () => {
+	it("records the ref on the waiting card without creating a board link; it counts while open", () => {
 		const result = addCrossProjectPrerequisite(createBoard(), "wwwww", DB_TASK);
 		if (!result.added) {
 			throw new Error(`expected the ref to be added, got ${result.reason}`);
 		}
 		expect(dependsOnOf(result.board, "wwwww")).toEqual([DB_TASK]);
 		expect(result.board.dependencies).toEqual([]);
-		expect(countPendingPrerequisites(result.board, "wwwww")).toBe(0);
+		const withDbTaskIn = (columnId: "in_progress" | "trash"): PrerequisiteContext => ({
+			lookupCrossProjectTask: (projectId, taskId) =>
+				projectId === DB_TASK.projectId && taskId === DB_TASK.taskId ? { columnId, title: "db task" } : null,
+		});
+		expect(countPendingPrerequisites(result.board, "wwwww", withDbTaskIn("in_progress"))).toBe(1);
+		expect(countPendingPrerequisites(result.board, "wwwww", withDbTaskIn("trash"))).toBe(0);
 	});
 
 	it("keeps the ref when the waiting card moves and never reports it ready to start", () => {
@@ -47,7 +55,7 @@ describe("sked fork: cross-project prerequisites", () => {
 			throw new Error("expected the ref to be added");
 		}
 		const moved = moveTaskToColumn(linked.board, "wwwww", "review");
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(moved.board, "wwwww");
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(moved.board, "wwwww", SAME_BOARD_ONLY);
 		expect(trashed.readyTaskIds).toEqual([]);
 		expect(dependsOnOf(trashed.board, "wwwww")).toEqual([DB_TASK]);
 	});

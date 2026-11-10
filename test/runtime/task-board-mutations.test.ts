@@ -14,6 +14,9 @@ import {
 	trashTaskAndGetReadyLinkedTaskIds,
 	updateTask,
 } from "../../src/core/task-board-mutations";
+import { NO_CROSS_PROJECT_TASKS, type PrerequisiteContext } from "../../src/core/task-prerequisites";
+
+const SAME_BOARD_ONLY: PrerequisiteContext = { lookupCrossProjectTask: NO_CROSS_PROJECT_TASKS };
 
 function createBoard(): RuntimeBoardData {
 	return {
@@ -40,7 +43,7 @@ describe("deleteTasksFromBoard", () => {
 		if (!linked.added) {
 			throw new Error("Expected dependency to be created.");
 		}
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(linked.board, "bbbbb");
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(linked.board, "bbbbb", SAME_BOARD_ONLY);
 		const deleted = deleteTasksFromBoard(trashed.board, ["bbbbb"]);
 
 		expect(deleted.deleted).toBe(true);
@@ -310,7 +313,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 			"prereq",
 		);
 
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "prereq");
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "prereq", SAME_BOARD_ONLY);
 
 		expect(trashed.readyTaskIds).toEqual(["waiting"]);
 		expect(trashed.board.dependencies).toEqual([]);
@@ -325,13 +328,13 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 		board = link(board, "waiting", "first");
 		board = link(board, "waiting", "second");
 
-		const afterFirst = trashTaskAndGetReadyLinkedTaskIds(board, "first");
+		const afterFirst = trashTaskAndGetReadyLinkedTaskIds(board, "first", SAME_BOARD_ONLY);
 		expect(afterFirst.readyTaskIds).toEqual([]);
 		expect(afterFirst.board.dependencies).toEqual([
 			expect.objectContaining({ fromTaskId: "waiting", toTaskId: "second" }),
 		]);
 
-		const afterSecond = trashTaskAndGetReadyLinkedTaskIds(afterFirst.board, "second");
+		const afterSecond = trashTaskAndGetReadyLinkedTaskIds(afterFirst.board, "second", SAME_BOARD_ONLY);
 		expect(afterSecond.readyTaskIds).toEqual(["waiting"]);
 	});
 
@@ -344,7 +347,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 		board = link(board, "waiting", "queued");
 		board = link(board, "waiting", "reviewed");
 
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "reviewed");
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "reviewed", SAME_BOARD_ONLY);
 
 		expect(trashed.readyTaskIds).toEqual([]);
 	});
@@ -360,7 +363,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 				"prereq",
 			);
 
-			const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "prereq");
+			const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "prereq", SAME_BOARD_ONLY);
 
 			expect(trashed.readyTaskIds).toEqual([]);
 			expect(trashed.board.dependencies).toEqual([]);
@@ -375,10 +378,10 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 			board = link(board, "waiting", "reviewed");
 			board = link(board, "waiting", "running");
 
-			const afterReviewed = trashTaskAndGetReadyLinkedTaskIds(board, "reviewed");
+			const afterReviewed = trashTaskAndGetReadyLinkedTaskIds(board, "reviewed", SAME_BOARD_ONLY);
 			expect(afterReviewed.readyTaskIds).toEqual([]);
 
-			const afterRunning = trashTaskAndGetReadyLinkedTaskIds(afterReviewed.board, "running");
+			const afterRunning = trashTaskAndGetReadyLinkedTaskIds(afterReviewed.board, "running", SAME_BOARD_ONLY);
 			expect(afterRunning.readyTaskIds).toEqual([]);
 			expect(afterRunning.board.dependencies).toEqual([]);
 		});
@@ -392,10 +395,10 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 			board = link(board, "waiting", "reviewed");
 			board = link(board, "waiting", "running");
 
-			const afterRunning = trashTaskAndGetReadyLinkedTaskIds(board, "running");
+			const afterRunning = trashTaskAndGetReadyLinkedTaskIds(board, "running", SAME_BOARD_ONLY);
 			expect(afterRunning.readyTaskIds).toEqual([]);
 
-			const afterReviewed = trashTaskAndGetReadyLinkedTaskIds(afterRunning.board, "reviewed");
+			const afterReviewed = trashTaskAndGetReadyLinkedTaskIds(afterRunning.board, "reviewed", SAME_BOARD_ONLY);
 			expect(afterReviewed.readyTaskIds).toEqual(["waiting"]);
 		});
 	});
@@ -415,7 +418,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 				expect.objectContaining({ fromTaskId: "waiting", toTaskId: "reviewed" }),
 			]);
 
-			const trashed = trashTaskAndGetReadyLinkedTaskIds(deleted.board, "reviewed");
+			const trashed = trashTaskAndGetReadyLinkedTaskIds(deleted.board, "reviewed", SAME_BOARD_ONLY);
 			expect(trashed.readyTaskIds).toEqual(["waiting"]);
 		});
 
@@ -428,7 +431,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 			board = link(board, "waiting", "reviewed");
 			board = link(board, "waiting", "deleted");
 
-			const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "reviewed");
+			const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "reviewed", SAME_BOARD_ONLY);
 			expect(trashed.readyTaskIds).toEqual([]);
 
 			const deleted = deleteTasksFromBoard(trashed.board, ["deleted"]);
@@ -451,7 +454,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 		// Mirrors `task done --column review`: each task is trashed against the latest board.
 		const readyPerStep: string[][] = [];
 		for (const taskId of ["first", "second", "third"]) {
-			const trashed = trashTaskAndGetReadyLinkedTaskIds(board, taskId);
+			const trashed = trashTaskAndGetReadyLinkedTaskIds(board, taskId, SAME_BOARD_ONLY);
 			readyPerStep.push(trashed.readyTaskIds);
 			board = trashed.board;
 		}
@@ -472,7 +475,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 		board = link(board, "d", "b");
 		board = link(board, "d", "c");
 
-		const afterA = trashTaskAndGetReadyLinkedTaskIds(board, "a");
+		const afterA = trashTaskAndGetReadyLinkedTaskIds(board, "a", SAME_BOARD_ONLY);
 		expect([...afterA.readyTaskIds].sort()).toEqual(["b", "c"]);
 		board = afterA.board;
 
@@ -483,10 +486,10 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 		board = moveTaskToColumn(board, "c", "review").board;
 		expect(board.dependencies).toHaveLength(2);
 
-		const afterB = trashTaskAndGetReadyLinkedTaskIds(board, "b");
+		const afterB = trashTaskAndGetReadyLinkedTaskIds(board, "b", SAME_BOARD_ONLY);
 		expect(afterB.readyTaskIds).toEqual([]);
 
-		const afterC = trashTaskAndGetReadyLinkedTaskIds(afterB.board, "c");
+		const afterC = trashTaskAndGetReadyLinkedTaskIds(afterB.board, "c", SAME_BOARD_ONLY);
 		expect(afterC.readyTaskIds).toEqual(["d"]);
 	});
 
@@ -502,11 +505,11 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 		const startedEarly = moveTaskToColumn(board, "waiting", "in_progress");
 		expect(startedEarly.board.dependencies).toEqual([]);
 
-		const afterFirst = trashTaskAndGetReadyLinkedTaskIds(startedEarly.board, "first");
+		const afterFirst = trashTaskAndGetReadyLinkedTaskIds(startedEarly.board, "first", SAME_BOARD_ONLY);
 		expect(afterFirst.moved).toBe(true);
 		expect(afterFirst.readyTaskIds).toEqual([]);
 
-		const afterSecond = trashTaskAndGetReadyLinkedTaskIds(afterFirst.board, "second");
+		const afterSecond = trashTaskAndGetReadyLinkedTaskIds(afterFirst.board, "second", SAME_BOARD_ONLY);
 		expect(afterSecond.moved).toBe(true);
 		expect(afterSecond.readyTaskIds).toEqual([]);
 	});
@@ -524,7 +527,7 @@ describe("linked task auto-start waits for ALL prerequisites", () => {
 		board = link(board, "joined", "shared");
 		board = link(board, "joined", "other");
 
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "shared");
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(board, "shared", SAME_BOARD_ONLY);
 
 		expect([...trashed.readyTaskIds].sort()).toEqual(["solo-1", "solo-2"]);
 	});
@@ -538,14 +541,20 @@ describe("countPendingPrerequisites", () => {
 			["second", "in_progress"],
 			["third", "backlog"],
 		]);
-		expect(countPendingPrerequisites(board, "waiting")).toBe(0);
+		expect(countPendingPrerequisites(board, "waiting", SAME_BOARD_ONLY)).toBe(0);
 		board = link(board, "waiting", "first");
 		board = link(board, "waiting", "second");
 		board = link(board, "waiting", "third");
 
-		expect(countPendingPrerequisites(board, "waiting")).toBe(3);
-		expect(countPendingPrerequisites(board, "third")).toBe(0);
-		expect(countPendingPrerequisites(trashTaskAndGetReadyLinkedTaskIds(board, "first").board, "waiting")).toBe(2);
+		expect(countPendingPrerequisites(board, "waiting", SAME_BOARD_ONLY)).toBe(3);
+		expect(countPendingPrerequisites(board, "third", SAME_BOARD_ONLY)).toBe(0);
+		expect(
+			countPendingPrerequisites(
+				trashTaskAndGetReadyLinkedTaskIds(board, "first", SAME_BOARD_ONLY).board,
+				"waiting",
+				SAME_BOARD_ONLY,
+			),
+		).toBe(2);
 	});
 });
 
@@ -659,7 +668,7 @@ describe("dependsOn (sked fork: persistent prerequisite record)", () => {
 		);
 		const linkedBoth = link(board, "waiting", "second");
 
-		const trashed = trashTaskAndGetReadyLinkedTaskIds(linkedBoth, "first");
+		const trashed = trashTaskAndGetReadyLinkedTaskIds(linkedBoth, "first", SAME_BOARD_ONLY);
 
 		expect(trashed.board.dependencies).toEqual([
 			expect.objectContaining({ fromTaskId: "waiting", toTaskId: "second" }),
@@ -696,7 +705,9 @@ describe("dependsOn (sked fork: persistent prerequisite record)", () => {
 			"prereq",
 		);
 
-		const deleted = deleteTasksFromBoard(trashTaskAndGetReadyLinkedTaskIds(board, "prereq").board, ["prereq"]);
+		const deleted = deleteTasksFromBoard(trashTaskAndGetReadyLinkedTaskIds(board, "prereq", SAME_BOARD_ONLY).board, [
+			"prereq",
+		]);
 
 		expect(dependsOnOf(deleted.board, "waiting")).toEqual([{ taskId: "prereq" }]);
 	});
@@ -832,7 +843,7 @@ describe("dependsOn (sked fork: persistent prerequisite record)", () => {
 				"waiting",
 				"prereq",
 			);
-			board = trashTaskAndGetReadyLinkedTaskIds(board, "prereq").board;
+			board = trashTaskAndGetReadyLinkedTaskIds(board, "prereq", SAME_BOARD_ONLY).board;
 			expect(board.dependencies).toEqual([]);
 			expect(dependsOnOf(board, "waiting")).toEqual([{ taskId: "prereq" }]);
 
