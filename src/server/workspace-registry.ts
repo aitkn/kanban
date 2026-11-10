@@ -20,7 +20,7 @@ import {
 } from "../state/workspace-state";
 import type { PtyBackend } from "../terminal/pty-backend";
 import { TerminalSessionManager } from "../terminal/session-manager";
-import { collectReferencedTasksByProjectId } from "./cross-project-task-refs";
+import { collectReferencedTasksByProjectId, type ProjectBoardForTaskRefs } from "./cross-project-task-refs";
 
 export interface WorkspaceRegistryScope {
 	workspaceId: string;
@@ -36,6 +36,12 @@ export interface CreateWorkspaceRegistryDependencies {
 	onTerminalManagerReady?: (workspaceId: string, manager: TerminalSessionManager) => void;
 	// sked fork: where task and shell PTYs run. Defaults to inside this process.
 	ptyBackend?: PtyBackend;
+}
+
+/** sked fork: a project's board as last read, with its live sessions; see `loadProjectBoards`. */
+export interface ProjectBoardSnapshot extends ProjectBoardForTaskRefs {
+	repoPath: string;
+	sessionsByTaskId: Map<string, RuntimeTaskSessionSummary>;
 }
 
 export interface DisposeWorkspaceRegistryOptions {
@@ -85,6 +91,8 @@ export interface WorkspaceRegistry {
 		currentProjectId: string | null;
 		projects: RuntimeProjectSummary[];
 	}>;
+	/** sked fork: every project's board and live sessions, read the way `buildProjectsPayload` reads them. */
+	loadProjectBoards: () => Promise<ProjectBoardSnapshot[]>;
 	resolveWorkspaceForStream: (
 		requestedWorkspaceId: string | null,
 		options?: {
@@ -358,6 +366,19 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		return response;
 	};
 
+	const summarizeProjects = async (projects: readonly RuntimeWorkspaceIndexEntry[]) =>
+		await Promise.all(
+			projects.map(async (project) => ({ project, ...(await summarizeProject(project.workspaceId)) })),
+		);
+
+	const loadProjectBoards = async (): Promise<ProjectBoardSnapshot[]> =>
+		(await summarizeProjects(await listWorkspaceIndexEntries())).map(({ project, board, sessionsByTaskId }) => ({
+			workspaceId: project.workspaceId,
+			repoPath: project.repoPath,
+			board,
+			sessionsByTaskId,
+		}));
+
 	const buildProjectsPayload = async (preferredCurrentProjectId: string | null) => {
 		const projects = await listWorkspaceIndexEntries();
 		const fallbackProjectId =
@@ -369,9 +390,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 				projects.some((project) => project.workspaceId === preferredCurrentProjectId) &&
 				preferredCurrentProjectId) ||
 			fallbackProjectId;
-		const summarized = await Promise.all(
-			projects.map(async (project) => ({ project, ...(await summarizeProject(project.workspaceId)) })),
-		);
+		const summarized = await summarizeProjects(projects);
 		// sked fork: short names and cross-project chip targets ride on the project summaries.
 		const shortNames = resolveProjectShortNames(projects);
 		const referencedTasksByProjectId = collectReferencedTasksByProjectId(
@@ -521,6 +540,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		createProjectSummary: toProjectSummary,
 		buildWorkspaceStateSnapshot,
 		buildProjectsPayload,
+		loadProjectBoards,
 		resolveWorkspaceForStream,
 		listManagedWorkspaces: () => {
 			return Array.from(terminalManagersByWorkspaceId.entries()).map(([workspaceId, terminalManager]) => ({

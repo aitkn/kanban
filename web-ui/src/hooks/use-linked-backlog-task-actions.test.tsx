@@ -1,9 +1,11 @@
+import { NO_CROSS_PROJECT_TASKS, type PrerequisiteContext } from "@runtime-task-prerequisites";
 import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
 import { getDetailTerminalTaskId } from "@/hooks/use-terminal-panels";
+import type { RuntimeCrossProjectAutoStartResponse } from "@/runtime/types";
 import type { BoardCard, BoardData, BoardDependency } from "@/types";
 
 const trackTaskDependencyCreatedMock = vi.hoisted(() => vi.fn());
@@ -58,6 +60,9 @@ function createBoard(dependencies: BoardDependency[] = []): BoardData {
 	};
 }
 
+const SAME_BOARD_ONLY: PrerequisiteContext = { lookupCrossProjectTask: NO_CROSS_PROJECT_TASKS };
+const NO_CROSS_PROJECT_AUTO_START = async (): Promise<RuntimeCrossProjectAutoStartResponse | null> => null;
+
 interface HookSnapshot {
 	board: BoardData;
 	handleCreateDependency: (fromTaskId: string, toTaskId: string) => void;
@@ -89,6 +94,8 @@ function HookHarness({
 	waitForBacklogStartAnimationAvailability,
 	stopTaskSession,
 	cleanupTaskWorkspace,
+	prerequisites = SAME_BOARD_ONLY,
+	startCrossProjectDependents = NO_CROSS_PROJECT_AUTO_START,
 }: {
 	boardFactory?: () => BoardData;
 	onSnapshot: (snapshot: HookSnapshot) => void;
@@ -102,6 +109,8 @@ function HookHarness({
 	waitForBacklogStartAnimationAvailability?: () => Promise<void>;
 	stopTaskSession?: (taskId: string) => Promise<void>;
 	cleanupTaskWorkspace?: (taskId: string) => Promise<unknown>;
+	prerequisites?: PrerequisiteContext;
+	startCrossProjectDependents?: (taskId: string) => Promise<RuntimeCrossProjectAutoStartResponse | null>;
 }): null {
 	const [board, setBoard] = useState<BoardData>(() => (boardFactory ? boardFactory() : createBoard()));
 	const actions = useLinkedBacklogTaskActions({
@@ -114,6 +123,8 @@ function HookHarness({
 		kickoffTaskInProgress: kickoffTaskInProgress ?? (async (_task: BoardCard, _taskId: string) => true),
 		startBacklogTaskWithAnimation,
 		waitForBacklogStartAnimationAvailability,
+		prerequisites,
+		startCrossProjectDependents,
 	});
 
 	useEffect(() => {
@@ -557,5 +568,137 @@ describe("useLinkedBacklogTaskActions", () => {
 				?.cards.map((card) => card.id)
 				.sort(),
 		).toEqual(["task-2", "task-4"]);
+	});
+
+	describe("sked fork: cross-project prerequisites", () => {
+		const DB_REF = { taskId: "db001", projectId: "skedai-db" };
+		const dbTaskIn = (columnId: "in_progress" | "trash"): PrerequisiteContext => ({
+			lookupCrossProjectTask: (projectId, taskId) =>
+				projectId === DB_REF.projectId && taskId === DB_REF.taskId ? { columnId, title: "Migrate schema" } : null,
+		});
+		// task-1 waits on task-2 (same board, in Review) and on db001 (another project's board).
+		const boardFactory = (): BoardData => {
+			const board = createBoard([{ id: "dep-1", fromTaskId: "task-1", toTaskId: "task-2", createdAt: 10 }]);
+			return {
+				...board,
+				columns: board.columns.map((column) =>
+					column.id === "backlog"
+						? {
+								...column,
+								cards: column.cards.map((card) =>
+									card.id === "task-1" ? { ...card, dependsOn: [DB_REF] } : card,
+								),
+							}
+						: column,
+				),
+			};
+		};
+
+		async function moveTask2ToDone(
+			prerequisites: PrerequisiteContext,
+			fromColumnId: "review" | "in_progress" = "review",
+		): Promise<{
+			kickoffTaskInProgress: ReturnType<typeof vi.fn>;
+			startCrossProjectDependents: ReturnType<typeof vi.fn>;
+		}> {
+			let latestSnapshot: HookSnapshot | null = null;
+			const kickoffTaskInProgress = vi.fn(async (_task: BoardCard, _taskId: string) => true);
+			const startCrossProjectDependents = vi.fn(
+				async (_taskId: string): Promise<RuntimeCrossProjectAutoStartResponse> => ({
+					ok: true,
+					startedTasks: [{ projectId: "skedai-web", taskId: "web01", title: "Use the new schema" }],
+					failedTasks: [],
+				}),
+			);
+			const factory = (): BoardData => {
+				const board = boardFactory();
+				if (fromColumnId === "review") {
+					return board;
+				}
+				const task2 = board.columns.find((column) => column.id === "review")?.cards[0];
+				return {
+					...board,
+					columns: board.columns.map((column) =>
+						column.id === "review"
+							? { ...column, cards: [] }
+							: column.id === "in_progress" && task2
+								? { ...column, cards: [task2] }
+								: column,
+					),
+				};
+			};
+			await act(async () => {
+				root.render(
+					<HookHarness
+						boardFactory={factory}
+						kickoffTaskInProgress={kickoffTaskInProgress}
+						prerequisites={prerequisites}
+						startCrossProjectDependents={startCrossProjectDependents}
+						onSnapshot={(snapshot) => {
+							latestSnapshot = snapshot;
+						}}
+					/>,
+				);
+			});
+			await act(async () => {
+				await (latestSnapshot as HookSnapshot | null)?.requestMoveTaskToTrash("task-2", fromColumnId);
+			});
+			return { kickoffTaskInProgress, startCrossProjectDependents };
+		}
+
+		it("holds back a waiting card while its cross-project prerequisite is open", async () => {
+			const { kickoffTaskInProgress } = await moveTask2ToDone(dbTaskIn("in_progress"));
+			expect(kickoffTaskInProgress).not.toHaveBeenCalled();
+		});
+
+		it("starts the waiting card when its cross-project prerequisite is already done", async () => {
+			const { kickoffTaskInProgress } = await moveTask2ToDone(dbTaskIn("trash"));
+			expect(kickoffTaskInProgress).toHaveBeenCalledTimes(1);
+			expect(kickoffTaskInProgress.mock.calls[0]?.[1]).toBe("task-1");
+		});
+
+		it("asks the runtime to start waiting cards on other boards after a saved Review to Done move", async () => {
+			const { startCrossProjectDependents } = await moveTask2ToDone(dbTaskIn("in_progress"));
+			expect(startCrossProjectDependents).toHaveBeenCalledWith("task-2");
+			expect(showAppToastMock).toHaveBeenCalledWith(
+				expect.objectContaining({ intent: "success", message: expect.stringContaining('"Use the new schema"') }),
+			);
+		});
+
+		it("warns when the runtime could not be asked", async () => {
+			let latestSnapshot: HookSnapshot | null = null;
+			await act(async () => {
+				root.render(
+					<HookHarness
+						boardFactory={boardFactory}
+						prerequisites={dbTaskIn("in_progress")}
+						startCrossProjectDependents={async () => null}
+						onSnapshot={(snapshot) => {
+							latestSnapshot = snapshot;
+						}}
+					/>,
+				);
+			});
+			await act(async () => {
+				await (latestSnapshot as HookSnapshot | null)?.requestMoveTaskToTrash("task-2", "review");
+			});
+			expect(showAppToastMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					intent: "warning",
+					message: expect.stringContaining("Could not check other projects"),
+				}),
+			);
+		});
+
+		it("does not ask the runtime when the card reached Done from another column", async () => {
+			const { startCrossProjectDependents } = await moveTask2ToDone(dbTaskIn("in_progress"), "in_progress");
+			expect(startCrossProjectDependents).not.toHaveBeenCalled();
+		});
+
+		it("does not ask the runtime when the move to Done was not saved", async () => {
+			waitForTaskDoneOnServerMock.mockResolvedValueOnce(false);
+			const { startCrossProjectDependents } = await moveTask2ToDone(dbTaskIn("in_progress"));
+			expect(startCrossProjectDependents).not.toHaveBeenCalled();
+		});
 	});
 });

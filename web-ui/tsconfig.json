@@ -23,7 +23,8 @@
       "@runtime-project-short-name": ["../src/core/project-short-name.ts"],
       "@runtime-task-title": ["../src/core/task-title.ts"],
       "@runtime-task-worktree-path": ["../src/workspace/task-worktree-path.ts"],
-      "@runtime-task-state": ["../src/core/task-board-mutations.ts"]
+      "@runtime-task-state": ["../src/core/task-board-mutations.ts"],
+      "@runtime-task-prerequisites": ["../src/core/task-prerequisites.ts"]
     },
     "types": ["vitest/globals"]
   },

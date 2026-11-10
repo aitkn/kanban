@@ -2,12 +2,8 @@
 // references in a card's `dependsOn`, so the web UI can colour cross-project chips without
 // holding the other project's board. Delivered on each project summary as `referencedTasks`.
 
-import type {
-	RuntimeBoardColumnId,
-	RuntimeBoardData,
-	RuntimeProjectReferencedTask,
-	RuntimeTaskSessionSummary,
-} from "../core/api-contract";
+import type { RuntimeBoardData, RuntimeProjectReferencedTask, RuntimeTaskSessionSummary } from "../core/api-contract";
+import { resolveLiveTaskColumnId } from "../core/task-prerequisites";
 
 export interface ProjectBoardForTaskRefs {
 	workspaceId: string;
@@ -15,32 +11,6 @@ export interface ProjectBoardForTaskRefs {
 	board: RuntimeBoardData | null;
 	/** Live session summaries by task id, when the project has a running terminal manager. */
 	sessionsByTaskId?: ReadonlyMap<string, RuntimeTaskSessionSummary>;
-}
-
-/**
- * The column a card shows once the board catches up with its session. A board only moves a
- * card for a session change while that project is open in a browser, so a project nobody is
- * looking at keeps the old column on disk. These are the moves the web UI makes on its own
- * (`use-board-interactions.ts`); the project task counts apply the same awaiting-review and
- * interrupted rules.
- */
-export function resolveLiveTaskColumnId(
-	columnId: RuntimeBoardColumnId,
-	session: RuntimeTaskSessionSummary | undefined,
-): RuntimeBoardColumnId {
-	if (!session) {
-		return columnId;
-	}
-	if (session.state === "awaiting_review" && columnId === "in_progress") {
-		return "review";
-	}
-	if (session.state === "running" && columnId === "review") {
-		return "in_progress";
-	}
-	if (session.state === "interrupted" && (columnId === "in_progress" || columnId === "review")) {
-		return "trash";
-	}
-	return columnId;
 }
 
 /**

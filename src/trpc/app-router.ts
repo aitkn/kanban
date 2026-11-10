@@ -36,6 +36,8 @@ import type {
 	RuntimeCommandRunResponse,
 	RuntimeConfigResponse,
 	RuntimeConfigSaveRequest,
+	RuntimeCrossProjectAutoStartRequest,
+	RuntimeCrossProjectAutoStartResponse,
 	RuntimeDebugResetAllStateResponse,
 	RuntimeDirectoryListRequest,
 	RuntimeDirectoryListResponse,
@@ -127,6 +129,8 @@ import {
 	runtimeCommandRunResponseSchema,
 	runtimeConfigResponseSchema,
 	runtimeConfigSaveRequestSchema,
+	runtimeCrossProjectAutoStartRequestSchema,
+	runtimeCrossProjectAutoStartResponseSchema,
 	runtimeDebugResetAllStateResponseSchema,
 	runtimeDirectoryListRequestSchema,
 	runtimeDirectoryListResponseSchema,
@@ -370,6 +374,13 @@ export interface RuntimeTrpcContext {
 	hooksApi: {
 		ingest: (input: RuntimeHookIngestRequest) => Promise<RuntimeHookIngestResponse>;
 	};
+	// sked fork: starts cards on other projects' boards that waited on a card of this project.
+	crossProjectApi: {
+		startDependents: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input: RuntimeCrossProjectAutoStartRequest,
+		) => Promise<RuntimeCrossProjectAutoStartResponse>;
+	};
 }
 
 interface RuntimeTrpcContextWithWorkspaceScope extends RuntimeTrpcContext {
@@ -460,6 +471,13 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeTaskSessionStartResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.runtimeApi.startTaskSession(ctx.workspaceScope, input);
+			}),
+		// sked fork: call after a card of this workspace moved from Review to Done and the move was saved.
+		startCrossProjectDependents: workspaceProcedure
+			.input(runtimeCrossProjectAutoStartRequestSchema)
+			.output(runtimeCrossProjectAutoStartResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.crossProjectApi.startDependents(ctx.workspaceScope, input);
 			}),
 		stopTaskSession: workspaceProcedure
 			.input(runtimeTaskSessionStopRequestSchema)

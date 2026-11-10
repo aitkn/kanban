@@ -1,6 +1,8 @@
 // Main React composition root for the browser app.
 // Keep this file focused on wiring top-level hooks and surfaces together, and
 // push runtime-specific orchestration down into hooks and service modules.
+
+import { createCrossProjectTaskLookup } from "@runtime-task-prerequisites";
 import { FolderOpen } from "lucide-react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -10,6 +12,7 @@ import { notifyError, showAppToast } from "@/components/app-toaster";
 import { CardDetailView } from "@/components/card-detail-view";
 import { ClearTrashDialog } from "@/components/clear-trash-dialog";
 import { DebugDialog } from "@/components/debug-dialog";
+import { BlockedTaskStartDialog } from "@/components/dependencies/blocked-task-start-dialog";
 import { AgentTerminalPanel } from "@/components/detail-panels/agent-terminal-panel";
 import { GitHistoryView } from "@/components/git-history-view";
 import { KanbanBoard } from "@/components/kanban-board";
@@ -203,6 +206,7 @@ export default function App(): ReactElement {
 		fetchTaskChatMessages,
 		cleanupTaskWorkspace,
 		fetchTaskWorkspaceInfo,
+		startCrossProjectDependents,
 	} = useTaskSessions({
 		currentProjectId,
 		setSessions,
@@ -561,6 +565,13 @@ export default function App(): ReactElement {
 		setIsGitHistoryOpen(false);
 	}, []);
 
+	// sked fork: live columns of cards other boards reference, for the prerequisite rule.
+	// The board here is live, so same-board prerequisites need no session overlay.
+	const prerequisites = useMemo(
+		() => ({ lookupCrossProjectTask: createCrossProjectTaskLookup(projects) }),
+		[projects],
+	);
+
 	const {
 		handleProgrammaticCardMoveReady,
 		handleCreateDependency,
@@ -578,6 +589,7 @@ export default function App(): ReactElement {
 		handleConfirmClearTrash,
 		moveToTrashLoadingById,
 		trashTaskCount,
+		blockedTaskStart,
 	} = useBoardInteractions({
 		board,
 		setBoard,
@@ -598,6 +610,8 @@ export default function App(): ReactElement {
 		readyForReviewNotificationsEnabled,
 		taskGitActionLoadingByTaskId,
 		runAutoReviewGitAction,
+		prerequisites,
+		startCrossProjectDependents,
 	});
 
 	const {
@@ -613,6 +627,7 @@ export default function App(): ReactElement {
 		handleStartTask,
 		handleStartAllBacklogTasks,
 		setSelectedTaskId,
+		prerequisites,
 	});
 
 	// sked fork: cross-project prerequisite chips resolve against `projects` and open across a project switch.
@@ -959,6 +974,7 @@ export default function App(): ReactElement {
 												inlineTaskEditor={inlineTaskEditor}
 												onEditTask={handleOpenEditTask}
 												crossProjectTaskReferences={crossProjectTaskReferences}
+												prerequisites={prerequisites}
 												onSaveTaskTitle={handleSaveTaskTitle}
 												onCommitTask={handleCommitTask}
 												onOpenPrTask={handleOpenPrTask}
@@ -1148,6 +1164,12 @@ export default function App(): ReactElement {
 					defaultProviderId={defaultTaskClineProviderId}
 					defaultModelId={runtimeProjectConfig?.clineProviderSettings?.modelId ?? null}
 					defaultReasoningEffort={runtimeProjectConfig?.clineProviderSettings?.reasoningEffort ?? null}
+				/>
+				<BlockedTaskStartDialog
+					request={blockedTaskStart.pending}
+					projects={projects}
+					onCancel={blockedTaskStart.cancel}
+					onConfirm={blockedTaskStart.confirm}
 				/>
 				<ClearTrashDialog
 					open={isClearTrashDialogOpen}

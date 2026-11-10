@@ -23,6 +23,8 @@ export default defineConfig({
 			"@runtime-task-title": resolve(__dirname, "../src/core/task-title.ts"),
 			"@runtime-task-worktree-path": resolve(__dirname, "../src/workspace/task-worktree-path.ts"),
 			"@runtime-task-state": resolve(__dirname, "../src/core/task-board-mutations.ts"),
+			// sked fork: whether a card may start (open prerequisites, same-board and cross-project).
+			"@runtime-task-prerequisites": resolve(__dirname, "../src/core/task-prerequisites.ts"),
 		},
 		conditions: ["import", "module", "browser", "default"],
 	},

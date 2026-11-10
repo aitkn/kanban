@@ -1,5 +1,6 @@
 import type { DropResult } from "@hello-pangea/dnd";
 import { createShortTaskId } from "@runtime-task-id";
+import type { PrerequisiteContext } from "@runtime-task-prerequisites";
 import * as runtimeTaskState from "@runtime-task-state";
 
 import { createInitialBoardData } from "@/data/board-data";
@@ -402,22 +403,33 @@ export function removeTaskDependency(board: BoardData, dependencyId: string): { 
 	return runtimeTaskState.removeTaskDependency(board, dependencyId);
 }
 
-export function getReadyLinkedTaskIdsForTaskInTrash(board: BoardData, taskId: string): string[] {
-	return runtimeTaskState.getReadyLinkedTaskIdsForTaskInTrash(board, taskId);
+export function getReadyLinkedTaskIdsForTaskInTrash(
+	board: BoardData,
+	taskId: string,
+	prerequisites: PrerequisiteContext,
+): string[] {
+	return runtimeTaskState.getReadyLinkedTaskIdsForTaskInTrash(board, taskId, prerequisites);
 }
 
 export function trashTaskAndGetReadyLinkedTaskIds(
 	board: BoardData,
 	taskId: string,
-): { board: BoardData; moved: boolean; readyTaskIds: string[] } {
-	return runtimeTaskState.trashTaskAndGetReadyLinkedTaskIds(board, taskId);
+	prerequisites: PrerequisiteContext,
+): { board: BoardData; moved: boolean; readyTaskIds: string[]; fromColumnId: BoardColumnId | null } {
+	return runtimeTaskState.trashTaskAndGetReadyLinkedTaskIds(board, taskId, prerequisites);
 }
 
-/** Pending prerequisite count for every backlog card, keyed by task id. */
-export function getPendingPrerequisiteCountByTaskId(board: BoardData): Record<string, number> {
+/**
+ * sked fork: open prerequisite count for every backlog card, keyed by task id. Cross-project refs
+ * count while their card is not Done (`listOpenPrerequisites`).
+ */
+export function getPendingPrerequisiteCountByTaskId(
+	board: BoardData,
+	prerequisites: PrerequisiteContext,
+): Record<string, number> {
 	const counts: Record<string, number> = {};
 	for (const card of board.columns.find((column) => column.id === "backlog")?.cards ?? []) {
-		counts[card.id] = runtimeTaskState.countPendingPrerequisites(board, card.id);
+		counts[card.id] = runtimeTaskState.countPendingPrerequisites(board, card.id, prerequisites);
 	}
 	return counts;
 }

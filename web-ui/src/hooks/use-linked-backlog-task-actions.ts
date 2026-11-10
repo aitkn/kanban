@@ -1,8 +1,10 @@
+import { isPrerequisiteFinishingMove, type PrerequisiteContext } from "@runtime-task-prerequisites";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useRef } from "react";
 
 import { showAppToast } from "@/components/app-toaster";
 import { getDetailTerminalTaskId } from "@/hooks/use-terminal-panels";
+import type { RuntimeCrossProjectAutoStartResponse } from "@/runtime/types";
 import {
 	addTaskDependency,
 	findCardSelection,
@@ -31,6 +33,40 @@ async function waitForMoveToDoneSaved(task: BoardCard): Promise<boolean> {
 	return false;
 }
 
+function quoteTitles(tasks: readonly { title: string }[]): string {
+	return tasks.map((task) => `"${task.title}"`).join(", ");
+}
+
+/** sked fork: the runtime started cards on other boards, which nobody here can see; say so. */
+function reportCrossProjectAutoStart(task: BoardCard, response: RuntimeCrossProjectAutoStartResponse | null): void {
+	if (!response) {
+		showAppToast({
+			intent: "warning",
+			icon: "warning-sign",
+			message: `Could not check other projects for cards waiting on "${task.title}". Start them from their project.`,
+			timeout: 10000,
+		});
+		return;
+	}
+	if (response.startedTasks.length > 0) {
+		showAppToast({
+			intent: "success",
+			message: `Started on another project, now that nothing blocks it: ${quoteTitles(response.startedTasks)}.`,
+			timeout: 7000,
+		});
+	}
+	if (response.failedTasks.length > 0) {
+		showAppToast({
+			intent: "warning",
+			icon: "warning-sign",
+			message: `Could not start ${quoteTitles(response.failedTasks)} on another project: ${response.failedTasks
+				.map((task) => task.error)
+				.join("; ")}. Start it from that project.`,
+			timeout: 10000,
+		});
+	}
+}
+
 interface RequestMoveTaskToTrashOptions {
 	optimisticMoveApplied?: boolean;
 	skipWorkingChangeWarning?: boolean;
@@ -46,6 +82,8 @@ export function useLinkedBacklogTaskActions({
 	kickoffTaskInProgress,
 	startBacklogTaskWithAnimation,
 	waitForBacklogStartAnimationAvailability,
+	prerequisites,
+	startCrossProjectDependents,
 }: {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
@@ -61,6 +99,10 @@ export function useLinkedBacklogTaskActions({
 	) => Promise<boolean>;
 	startBacklogTaskWithAnimation?: (task: BoardCard) => Promise<boolean>;
 	waitForBacklogStartAnimationAvailability?: () => Promise<void>;
+	/** sked fork: resolves cross-project refs, so a waiting card starts only once nothing blocks it. */
+	prerequisites: PrerequisiteContext;
+	/** sked fork: starts the cards on other projects' boards that waited on a card that just finished. */
+	startCrossProjectDependents: (taskId: string) => Promise<RuntimeCrossProjectAutoStartResponse | null>;
 }): {
 	handleCreateDependency: (fromTaskId: string, toTaskId: string) => void;
 	handleDeleteDependency: (dependencyId: string) => void;
@@ -72,10 +114,15 @@ export function useLinkedBacklogTaskActions({
 	) => Promise<void>;
 } {
 	const boardRef = useRef(board);
+	const prerequisitesRef = useRef(prerequisites);
 
 	useEffect(() => {
 		boardRef.current = board;
 	}, [board]);
+
+	useEffect(() => {
+		prerequisitesRef.current = prerequisites;
+	}, [prerequisites]);
 
 	const handleCreateDependency = useCallback(
 		(fromTaskId: string, toTaskId: string) => {
@@ -122,7 +169,7 @@ export function useLinkedBacklogTaskActions({
 	const performMoveTaskToTrash = useCallback(
 		async (task: BoardCard, currentBoard?: BoardData): Promise<void> => {
 			const boardBeforeTrash = currentBoard ?? boardRef.current;
-			const trashed = trashTaskAndGetReadyLinkedTaskIds(boardBeforeTrash, task.id);
+			const trashed = trashTaskAndGetReadyLinkedTaskIds(boardBeforeTrash, task.id, prerequisitesRef.current);
 			if (!trashed.moved) {
 				if (!(await waitForMoveToDoneSaved(task))) {
 					return;
@@ -136,7 +183,11 @@ export function useLinkedBacklogTaskActions({
 			boardRef.current = trashed.board;
 
 			setBoard((currentBoardState) => {
-				const latestTrashResult = trashTaskAndGetReadyLinkedTaskIds(currentBoardState, task.id);
+				const latestTrashResult = trashTaskAndGetReadyLinkedTaskIds(
+					currentBoardState,
+					task.id,
+					prerequisitesRef.current,
+				);
 				return latestTrashResult.moved ? latestTrashResult.board : currentBoardState;
 			});
 			setSelectedTaskId((currentSelectedTaskId) =>
@@ -150,6 +201,12 @@ export function useLinkedBacklogTaskActions({
 			if (!(await waitForMoveToDoneSaved(task))) {
 				return;
 			}
+
+			// sked fork: same rule as the same-board start below (`isPrerequisiteFinishingMove`). Runs
+			// alongside it, so another repo's worktree setup does not hold up this card's cleanup.
+			const crossProjectAutoStart = isPrerequisiteFinishingMove(trashed.fromColumnId)
+				? startCrossProjectDependents(task.id).then((response) => reportCrossProjectAutoStart(task, response))
+				: Promise.resolve();
 
 			const readyTasks = trashed.readyTaskIds
 				.map((readyTaskId) => findCardSelection(trashed.board, readyTaskId)?.card ?? null)
@@ -197,6 +254,7 @@ export function useLinkedBacklogTaskActions({
 
 			await Promise.all([stopTaskSession(task.id), stopTaskSession(getDetailTerminalTaskId(task.id))]);
 			await cleanupTaskWorkspace(task.id);
+			await crossProjectAutoStart;
 		},
 		[
 			cleanupTaskWorkspace,
@@ -205,6 +263,7 @@ export function useLinkedBacklogTaskActions({
 			setBoard,
 			setSelectedTaskId,
 			startBacklogTaskWithAnimation,
+			startCrossProjectDependents,
 			stopTaskSession,
 			waitForBacklogStartAnimationAvailability,
 		],

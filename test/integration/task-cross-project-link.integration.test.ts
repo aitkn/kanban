@@ -104,7 +104,7 @@ async function dependsOnOf(projectPath: string, taskId: string) {
 }
 
 describe.sequential("sked fork: cross-project task links", () => {
-	it("records a display-only ref to a task on another project's board", async () => {
+	it("records a ref to a task on another project's board without a live link", async () => {
 		await withSandbox(async ({ webPath, dbPath, webId, dbId }) => {
 			expect([webId, dbId]).toEqual(["skedai-web", "skedai-db"]);
 			const saved: string[] = [];

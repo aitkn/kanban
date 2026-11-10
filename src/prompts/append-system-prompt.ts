@@ -144,6 +144,8 @@ If the user asks you to write code, fix a bug, implement a feature, refactor, or
 - If the user asks to add tasks to kb, ask kb, kanban, or says add tasks without other context, they likely want to add tasks in Kanban. This includes phrases like "create tasks", "make 3 tasks", "add a task", "break down into tasks", "split into tasks", "decompose into tasks", and "turn into tasks".
 - Kanban also supports linking tasks. Linking is useful both for parallelization and for dependencies: when work is easy to decompose into multiple pieces that can be done in parallel, link multiple backlog tasks to the same dependency so they all become ready to start once that dependency finishes; when one piece of work depends on another, use links to represent that follow-on dependency. If both linked tasks are in backlog, Kanban preserves the order you pass to the command: \`--task-id\` waits on \`--linked-task-id\`, and on the board the arrow points into \`--linked-task-id\`. Once only one linked task remains in backlog, Kanban reorients the saved dependency so the backlog task is the waiting dependent task and the other task is the prerequisite. The board arrow points into the prerequisite task so the user can see what must finish first. A link requires at least one backlog task. A backlog task can be linked to several prerequisites, and it becomes ready to start only when the last of them is moved from review to done.
 - How linking works: when a task in the review column is moved to done, each linked backlog task that has no other unfinished prerequisites automatically starts. A backlog task linked to several prerequisites waits until all of them are done, so links can also join parallel work into one follow-on task. Only a review to done move starts waiting tasks: if a prerequisite is moved to done from another column or deleted, its link is just removed, and if that was the last link the waiting task stays in backlog until someone starts it. This is how you chain work so tasks kick off autonomously without manual intervention.
+- A task's prerequisites on other projects' boards (cross-project links, below) count the same way: a backlog task starts only when every prerequisite it lists, on this board or another, is done. When a task on any board moves from review to done, the runtime starts each backlog task on the other boards that waits on it and has nothing else open, with its own session and worktree, whether or not that project is open in a browser. A prerequisite that was deleted, or whose project was removed from Kanban, no longer blocks.
+- \`task start\` refuses a backlog task whose prerequisites are not all done and lists them under \`openPrerequisites\`. Pass \`--force\` only when the user explicitly wants that task started anyway.
 - Tasks can also enable automatic review actions: auto-commit or auto-open-pr once completed, which then moves the task to done and kicks off any linked tasks. Combining auto-review with linking is how you can set up fully autonomous pipelines when the user wants it. For example, enabling auto-commit on each task in a chain: task A finishes, auto-commits and is moved to done, task B auto-starts from backlog, auto-commits and is moved to done, task C auto-starts, and so on.
 - If your current working directory is inside \`.cline/worktrees/\`, you are inside a Kanban task worktree. In that case, create or manage tasks against the main workspace path, not the task worktree path. Pass the main workspace with \`--project-path\`.
 - If a task command fails because the runtime is unavailable, tell the user to start Kanban in that workspace first with \`${kanbanCommand}\`, then retry the task command.
@@ -278,7 +280,7 @@ Notes:
 
 ### Cross-project link
 
-Purpose: record that a task depends on a task on ANOTHER project's board (for example a web task waiting on a database task). It is display-only: it is listed in the task's \`dependsOn\` and never auto-starts anything.
+Purpose: record that a task depends on a task on ANOTHER project's board (for example a web task waiting on a database task). It is listed in the task's \`dependsOn\` and blocks the task like a same-board link: \`task start\` refuses it until the other task is done, and when the other task moves from review to done the runtime starts it, provided nothing else it depends on is still open.
 
 Command:
 \`${kanbanCommand} task link --task-id <task_id> --linked-task-id <other_task_id> (--linked-project-path <other_project_path> | --linked-project-id <other_project_id>) [--project-path <path>]\`
@@ -291,7 +293,7 @@ Parameters:
 Notes:
 - Both projects must already be added to Kanban; the linked task must exist on the other board and not be done.
 - Here \`--task-id\` always depends on \`--linked-task-id\`; there is no reorientation.
-- Use the same-board form (without \`--linked-project-*\`) whenever both tasks are on the same board, since only that form auto-starts the waiting task.
+- Use the same-board form (without \`--linked-project-*\`) whenever both tasks are on the same board; it draws the dependency arrow on the board.
 
 ## task unlink
 
@@ -335,11 +337,15 @@ Notes:
 Purpose: start a task by ensuring its worktree, launching its agent session, and moving it to \`in_progress\`.
 
 Command:
-\`${kanbanCommand} task start --task-id <task_id> [--project-path <path>]\`
+\`${kanbanCommand} task start --task-id <task_id> [--project-path <path>] [--force]\`
 
 Parameters:
 - \`--task-id <task_id>\` required task ID.
 - \`--project-path <path>\` optional workspace path. If not already registered in Kanban, it is auto-added for git repos.
+- \`--force\` optional. Starts a backlog task even though some of its prerequisites are not done.
+
+Notes:
+- A backlog task whose prerequisites (same-board links and cross-project links) are not all done is refused with \`"ok": false\` and an \`openPrerequisites\` list giving each one's \`ref\`, \`column\` and \`title\`. Tell the user what it waits on; only pass \`--force\` when they ask to start it anyway.
 
 # Workflow Notes
 

@@ -5,10 +5,8 @@ import type {
 	RuntimeBoardData,
 	RuntimeTaskSessionSummary,
 } from "../../../src/core/api-contract";
-import {
-	collectReferencedTasksByProjectId,
-	resolveLiveTaskColumnId,
-} from "../../../src/server/cross-project-task-refs";
+import { resolveLiveTaskColumnId } from "../../../src/core/task-prerequisites";
+import { collectReferencedTasksByProjectId } from "../../../src/server/cross-project-task-refs";
 
 function card(id: string, overrides: Partial<RuntimeBoardCard> = {}): RuntimeBoardCard {
 	return {

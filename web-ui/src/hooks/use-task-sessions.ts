@@ -10,6 +10,7 @@ import { type ClineChatActionResult, useClineChatRuntimeActions } from "@/hooks/
 import { estimateTaskSessionGeometry } from "@/runtime/task-session-geometry";
 import { getRuntimeTrpcClient } from "@/runtime/trpc-client";
 import type {
+	RuntimeCrossProjectAutoStartResponse,
 	RuntimeTaskChatMessage,
 	RuntimeTaskSessionMode,
 	RuntimeTaskSessionSummary,
@@ -68,6 +69,11 @@ export interface UseTaskSessionsResult {
 	fetchTaskChatMessages: (taskId: string) => Promise<RuntimeTaskChatMessage[] | null>;
 	cleanupTaskWorkspace: (taskId: string) => Promise<RuntimeWorktreeDeleteResponse | null>;
 	fetchTaskWorkspaceInfo: (task: BoardCard) => Promise<RuntimeTaskWorkspaceInfoResponse | null>;
+	/**
+	 * sked fork: after `taskId` moved from Review to Done and the move was saved, has the runtime start
+	 * the cards on other projects' boards that waited on it. Null when the request failed.
+	 */
+	startCrossProjectDependents: (taskId: string) => Promise<RuntimeCrossProjectAutoStartResponse | null>;
 }
 
 export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessionsInput): UseTaskSessionsResult {
@@ -283,6 +289,21 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 		[currentProjectId],
 	);
 
+	const startCrossProjectDependents = useCallback(
+		async (taskId: string): Promise<RuntimeCrossProjectAutoStartResponse | null> => {
+			if (!currentProjectId) {
+				return null;
+			}
+			try {
+				return await getRuntimeTrpcClient(currentProjectId).runtime.startCrossProjectDependents.mutate({ taskId });
+			} catch (error) {
+				console.error(`[startCrossProjectDependents] ${error instanceof Error ? error.message : String(error)}`);
+				return null;
+			}
+		},
+		[currentProjectId],
+	);
+
 	return {
 		upsertSession,
 		ensureTaskWorkspace,
@@ -295,5 +316,6 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 		fetchTaskChatMessages,
 		cleanupTaskWorkspace,
 		fetchTaskWorkspaceInfo,
+		startCrossProjectDependents,
 	};
 }

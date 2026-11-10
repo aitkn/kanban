@@ -10,6 +10,7 @@ import type {
 	RuntimeTaskImage,
 } from "./api-contract";
 import { createUniqueTaskId } from "./task-id";
+import { isPrerequisiteFinishingMove, listOpenPrerequisites, type PrerequisiteContext } from "./task-prerequisites";
 import { resolveTaskTitle } from "./task-title";
 
 export interface RuntimeCreateTaskInput {
@@ -269,9 +270,11 @@ function isCrossProjectRef(ref: RuntimeTaskDependsOnRef, target: CrossProjectTas
 }
 
 /**
- * sked fork: record that `waitingTaskId` depends on a task on another project's board. The ref is
- * display-only: it never enters `board.dependencies`, so it starts nothing. The caller checks that
- * the other project and its task exist; boards cannot see each other.
+ * sked fork: record that `waitingTaskId` depends on a task on another project's board. The ref lives
+ * only in `dependsOn`, never in `board.dependencies`: it blocks the card while that task is open
+ * (`task-prerequisites.ts`), and the runtime starts the card when that task finishes
+ * (`src/server/cross-project-auto-start.ts`). The caller checks that the other project and its task
+ * exist; boards cannot see each other.
  */
 export function addCrossProjectPrerequisite(
 	board: RuntimeBoardData,
@@ -353,35 +356,41 @@ function resolveDependencyEndpoints(
 }
 
 // Backlog cards waiting on `taskId` whose wait is satisfied by `taskId` finishing.
-// Only a review -> done move counts as finishing; other moves into trash just drop the link.
+// Only a review -> done move counts as finishing (`isPrerequisiteFinishingMove`); other moves into
+// trash just drop the link. sked fork: a card also waits on a same-board card its `dependsOn` names,
+// whose live link may be gone (a prerequisite restored from Done to Review).
 function getBacklogTaskIdsUnblockedByTaskTrashed(
 	board: RuntimeBoardData,
 	taskId: string,
 	fromColumnId: RuntimeBoardColumnId | null,
 ): string[] {
-	if (!taskId || board.dependencies.length === 0 || fromColumnId !== "review") {
+	if (!taskId || !isPrerequisiteFinishingMove(fromColumnId)) {
 		return [];
 	}
 	const unblockedTaskIds = new Set<string>();
 	for (const dependency of board.dependencies) {
-		if (dependency.toTaskId !== taskId) {
-			continue;
+		if (dependency.toTaskId === taskId && getTaskColumnId(board, dependency.fromTaskId) === "backlog") {
+			unblockedTaskIds.add(dependency.fromTaskId);
 		}
-		if (getTaskColumnId(board, dependency.fromTaskId) !== "backlog") {
-			continue;
+	}
+	for (const card of board.columns.find((column) => column.id === "backlog")?.cards ?? []) {
+		if ((card.dependsOn ?? []).some((ref) => isSameProjectRef(ref, taskId))) {
+			unblockedTaskIds.add(card.id);
 		}
-		unblockedTaskIds.add(dependency.fromTaskId);
 	}
 	return [...unblockedTaskIds];
 }
 
 /**
- * sked fork: number of unfinished prerequisites a backlog card still waits on.
- * Links are pruned as soon as a prerequisite reaches done, so every link that
- * remains with this card on the waiting side is a prerequisite still pending.
+ * sked fork: number of prerequisites a card still waits on: same-board and cross-project ones that
+ * exist and are not Done (`listOpenPrerequisites`).
  */
-export function countPendingPrerequisites(board: RuntimeBoardData, taskId: string): number {
-	return board.dependencies.filter((dependency) => dependency.fromTaskId === taskId).length;
+export function countPendingPrerequisites(
+	board: RuntimeBoardData,
+	taskId: string,
+	prerequisites: PrerequisiteContext,
+): number {
+	return listOpenPrerequisites(board, taskId, prerequisites).length;
 }
 
 export function updateTaskDependencies(board: RuntimeBoardData): RuntimeBoardData {
@@ -622,20 +631,27 @@ export function removeTaskPrerequisite(
 	};
 }
 
-export function getReadyLinkedTaskIdsForTaskInTrash(board: RuntimeBoardData, taskId: string): string[] {
-	return trashTaskAndGetReadyLinkedTaskIds(board, taskId).readyTaskIds;
+export function getReadyLinkedTaskIdsForTaskInTrash(
+	board: RuntimeBoardData,
+	taskId: string,
+	prerequisites: PrerequisiteContext,
+): string[] {
+	return trashTaskAndGetReadyLinkedTaskIds(board, taskId, prerequisites).readyTaskIds;
 }
 
 /**
  * sked fork: linked cards join (ALL prerequisites) instead of starting after the first (ANY).
  * Moves `taskId` to trash and returns the backlog cards that should auto-start.
- * A waiting card starts only when this move finished its LAST pending prerequisite
- * (join semantics): it must have been unblocked by this review -> done move and have
- * no links left once the move has pruned the finished prerequisite.
+ * A waiting card starts only when this move finished its LAST open prerequisite
+ * (join semantics): it must have been unblocked by this review -> done move and be blocked by
+ * nothing once the move is applied, cross-project refs included (`prerequisites` resolves those).
+ * Cards on other projects' boards waiting on `taskId` are started by the runtime instead
+ * (`src/server/cross-project-auto-start.ts`).
  */
 export function trashTaskAndGetReadyLinkedTaskIds(
 	board: RuntimeBoardData,
 	taskId: string,
+	prerequisites: PrerequisiteContext,
 	now: number = Date.now(),
 ): RuntimeTrashTaskResult {
 	const fromColumnId = getTaskColumnId(board, taskId);
@@ -645,7 +661,7 @@ export function trashTaskAndGetReadyLinkedTaskIds(
 		return { ...movedToTrash, readyTaskIds: [] };
 	}
 	const readyTaskIds = unblockedTaskIds.filter(
-		(unblockedTaskId) => countPendingPrerequisites(movedToTrash.board, unblockedTaskId) === 0,
+		(unblockedTaskId) => listOpenPrerequisites(movedToTrash.board, unblockedTaskId, prerequisites).length === 0,
 	);
 	return {
 		...movedToTrash,

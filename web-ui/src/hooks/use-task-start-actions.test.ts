@@ -1,7 +1,10 @@
+import { NO_CROSS_PROJECT_TASKS } from "@runtime-task-prerequisites";
 import { describe, expect, it } from "vitest";
 
 import { getStartableBacklogTaskIds } from "@/hooks/use-task-start-actions";
 import type { BoardCard, BoardData, BoardDependency } from "@/types";
+
+const SAME_BOARD_ONLY = { lookupCrossProjectTask: NO_CROSS_PROJECT_TASKS };
 
 describe("getStartableBacklogTaskIds", () => {
 	function createCard(id: string, prompt = "Do something"): BoardCard {
@@ -40,12 +43,12 @@ describe("getStartableBacklogTaskIds", () => {
 
 	it("returns all backlog task ids when there are no dependencies", () => {
 		const board = createBoard({ backlogCards: [createCard("task-1"), createCard("task-2"), createCard("task-3")] });
-		expect(getStartableBacklogTaskIds(board)).toEqual(["task-1", "task-2", "task-3"]);
+		expect(getStartableBacklogTaskIds(board, SAME_BOARD_ONLY)).toEqual(["task-1", "task-2", "task-3"]);
 	});
 
 	it("returns empty array when backlog is empty", () => {
 		const board = createBoard({ backlogCards: [] });
-		expect(getStartableBacklogTaskIds(board)).toEqual([]);
+		expect(getStartableBacklogTaskIds(board, SAME_BOARD_ONLY)).toEqual([]);
 	});
 
 	it("excludes a parent task whose child is also in the backlog", () => {
@@ -53,7 +56,7 @@ describe("getStartableBacklogTaskIds", () => {
 			backlogCards: [createCard("task-a"), createCard("task-b")],
 			dependencies: [{ id: "dep-1", fromTaskId: "task-a", toTaskId: "task-b", createdAt: 1 }],
 		});
-		expect(getStartableBacklogTaskIds(board)).toEqual(["task-b"]);
+		expect(getStartableBacklogTaskIds(board, SAME_BOARD_ONLY)).toEqual(["task-b"]);
 	});
 
 	it("excludes a parent task whose child is in progress", () => {
@@ -62,6 +65,6 @@ describe("getStartableBacklogTaskIds", () => {
 			dependencies: [{ id: "dep-1", fromTaskId: "task-a", toTaskId: "task-b", createdAt: 1 }],
 			inProgressCards: [createCard("task-b")],
 		});
-		expect(getStartableBacklogTaskIds(board)).toEqual([]);
+		expect(getStartableBacklogTaskIds(board, SAME_BOARD_ONLY)).toEqual([]);
 	});
 });
