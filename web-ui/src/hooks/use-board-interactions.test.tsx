@@ -233,7 +233,6 @@ describe("useBoardInteractions", () => {
 				startBacklogTaskWithAnimation = input.startBacklogTaskWithAnimation ?? null;
 				return {
 					handleCreateDependency: () => {},
-					handleDeleteDependency: () => {},
 					confirmMoveTaskToTrash: async () => {},
 					requestMoveTaskToTrash: async () => {},
 				};
@@ -317,7 +316,6 @@ describe("useBoardInteractions", () => {
 
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});
@@ -407,7 +405,6 @@ describe("useBoardInteractions", () => {
 
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});
@@ -472,7 +469,6 @@ describe("useBoardInteractions", () => {
 
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});
@@ -563,7 +559,6 @@ describe("useBoardInteractions", () => {
 
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});
@@ -665,7 +660,6 @@ describe("useBoardInteractions", () => {
 
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});
@@ -725,7 +719,6 @@ describe("useBoardInteractions", () => {
 
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});
@@ -805,7 +798,6 @@ describe("useBoardInteractions", () => {
 		});
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});
@@ -869,7 +861,6 @@ describe("useBoardInteractions", () => {
 		});
 		useLinkedBacklogTaskActionsMock.mockReturnValue({
 			handleCreateDependency: () => {},
-			handleDeleteDependency: () => {},
 			confirmMoveTaskToTrash: async () => {},
 			requestMoveTaskToTrash: async () => {},
 		});

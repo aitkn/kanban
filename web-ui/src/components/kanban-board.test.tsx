@@ -54,8 +54,8 @@ vi.mock("@/components/board-column", () => ({
 	),
 }));
 
-vi.mock("@/components/dependencies/dependency-overlay", () => ({
-	DependencyOverlay: (): null => null,
+vi.mock("@/components/dependencies/dependency-draft-overlay", () => ({
+	DependencyDraftOverlay: (): null => null,
 }));
 
 vi.mock("@/components/dependencies/use-dependency-linking", () => ({
@@ -341,7 +341,6 @@ describe("KanbanBoard", () => {
 					taskSessions={{}}
 					onCardSelect={() => {}}
 					onCreateTask={() => {}}
-					dependencies={[]}
 					onDragEnd={() => {}}
 					onRequestProgrammaticCardMoveReady={(nextRequestMove) => {
 						requestMove = nextRequestMove;
@@ -373,7 +372,6 @@ describe("KanbanBoard", () => {
 					taskSessions={{}}
 					onCardSelect={() => {}}
 					onCreateTask={() => {}}
-					dependencies={[]}
 					onDragEnd={onDragEnd}
 					onRequestProgrammaticCardMoveReady={(nextRequestMove) => {
 						requestMove = nextRequestMove;

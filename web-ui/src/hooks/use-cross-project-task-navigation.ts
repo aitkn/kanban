@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
 	type CrossProjectTaskReferences,
+	resolveCrossProjectDependents,
 	resolveCrossProjectTaskReference,
 } from "@/components/dependencies/cross-project-task-references";
 import {
@@ -77,6 +78,11 @@ export function useCrossProjectTaskNavigation({
 	const resolveProjectTask = useCallback(
 		(projectId: string, taskId: string) => resolveCrossProjectTaskReference(projects, projectId, taskId),
 		[projects],
+	);
+
+	const resolveProjectTaskDependents = useCallback(
+		(taskId: string) => resolveCrossProjectDependents(projects, currentProjectId, taskId),
+		[currentProjectId, projects],
 	);
 
 	const openProjectTask = useCallback(
@@ -162,5 +168,8 @@ export function useCrossProjectTaskNavigation({
 		setSelectedTaskId,
 	]);
 
-	return useMemo(() => ({ resolveProjectTask, openProjectTask }), [openProjectTask, resolveProjectTask]);
+	return useMemo(
+		() => ({ resolveProjectTask, resolveProjectTaskDependents, openProjectTask }),
+		[openProjectTask, resolveProjectTask, resolveProjectTaskDependents],
+	);
 }

@@ -372,15 +372,31 @@ export const runtimeProjectReferencedTaskSchema = z.object({
 });
 export type RuntimeProjectReferencedTask = z.infer<typeof runtimeProjectReferencedTaskSchema>;
 
+/**
+ * sked fork: a card on ANOTHER project's board whose `dependsOn` names `taskId` on this project's
+ * board, with the column it shows right now, for this project's "needed by" chips.
+ */
+export const runtimeProjectDependentTaskSchema = z.object({
+	/** The task on this project's board that the dependent waits on. */
+	taskId: z.string(),
+	dependentProjectId: z.string(),
+	dependentTaskId: z.string(),
+	title: z.string(),
+	columnId: runtimeBoardColumnIdSchema,
+});
+export type RuntimeProjectDependentTask = z.infer<typeof runtimeProjectDependentTaskSchema>;
+
 export const runtimeProjectSummarySchema = z.object({
 	id: z.string(),
 	path: z.string(),
 	name: z.string(),
 	taskCounts: runtimeProjectTaskCountsSchema,
-	// sked fork: the display short name (`resolveProjectShortNames`) and the tasks other boards
-	// reference. Both are set on every project in the runtime state stream.
+	// sked fork: the display short name (`resolveProjectShortNames`), the tasks other boards
+	// reference, and the cards on other boards that reference this board's tasks. All three are
+	// set on every project in the runtime state stream.
 	shortName: z.string().optional(),
 	referencedTasks: z.array(runtimeProjectReferencedTaskSchema).optional(),
+	dependentTasks: z.array(runtimeProjectDependentTaskSchema).optional(),
 });
 export type RuntimeProjectSummary = z.infer<typeof runtimeProjectSummarySchema>;
 
@@ -1059,6 +1075,26 @@ export const runtimeCrossProjectAutoStartResponseSchema = z.object({
 	error: z.string().optional(),
 });
 export type RuntimeCrossProjectAutoStartResponse = z.infer<typeof runtimeCrossProjectAutoStartResponseSchema>;
+
+/**
+ * sked fork: remove the link through which a card on another project's board waits on `taskId`, a
+ * task on the request's project: `kanban task unlink --task-id <dependentTaskId> --linked-task-id
+ * <taskId> --linked-project-id <request project>`, run against the dependent's board.
+ */
+export const runtimeCrossProjectUnlinkDependentRequestSchema = z.object({
+	taskId: z.string(),
+	dependentProjectId: z.string(),
+	dependentTaskId: z.string(),
+});
+export type RuntimeCrossProjectUnlinkDependentRequest = z.infer<typeof runtimeCrossProjectUnlinkDependentRequestSchema>;
+
+export const runtimeCrossProjectUnlinkDependentResponseSchema = z.object({
+	ok: z.boolean(),
+	error: z.string().optional(),
+});
+export type RuntimeCrossProjectUnlinkDependentResponse = z.infer<
+	typeof runtimeCrossProjectUnlinkDependentResponseSchema
+>;
 
 export const runtimeTaskSessionStopRequestSchema = z.object({
 	taskId: z.string(),

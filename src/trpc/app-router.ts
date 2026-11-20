@@ -38,6 +38,8 @@ import type {
 	RuntimeConfigSaveRequest,
 	RuntimeCrossProjectAutoStartRequest,
 	RuntimeCrossProjectAutoStartResponse,
+	RuntimeCrossProjectUnlinkDependentRequest,
+	RuntimeCrossProjectUnlinkDependentResponse,
 	RuntimeDebugResetAllStateResponse,
 	RuntimeDirectoryListRequest,
 	RuntimeDirectoryListResponse,
@@ -131,6 +133,8 @@ import {
 	runtimeConfigSaveRequestSchema,
 	runtimeCrossProjectAutoStartRequestSchema,
 	runtimeCrossProjectAutoStartResponseSchema,
+	runtimeCrossProjectUnlinkDependentRequestSchema,
+	runtimeCrossProjectUnlinkDependentResponseSchema,
 	runtimeDebugResetAllStateResponseSchema,
 	runtimeDirectoryListRequestSchema,
 	runtimeDirectoryListResponseSchema,
@@ -374,12 +378,16 @@ export interface RuntimeTrpcContext {
 	hooksApi: {
 		ingest: (input: RuntimeHookIngestRequest) => Promise<RuntimeHookIngestResponse>;
 	};
-	// sked fork: starts cards on other projects' boards that waited on a card of this project.
+	// sked fork: starts, or unlinks, cards on other projects' boards that wait on a card of this project.
 	crossProjectApi: {
 		startDependents: (
 			scope: RuntimeTrpcWorkspaceScope,
 			input: RuntimeCrossProjectAutoStartRequest,
 		) => Promise<RuntimeCrossProjectAutoStartResponse>;
+		unlinkDependent: (
+			scope: RuntimeTrpcWorkspaceScope,
+			input: RuntimeCrossProjectUnlinkDependentRequest,
+		) => Promise<RuntimeCrossProjectUnlinkDependentResponse>;
 	};
 }
 
@@ -478,6 +486,14 @@ export const runtimeAppRouter = t.router({
 			.output(runtimeCrossProjectAutoStartResponseSchema)
 			.mutation(async ({ ctx, input }) => {
 				return await ctx.crossProjectApi.startDependents(ctx.workspaceScope, input);
+			}),
+		// sked fork: removes the link through which a card on another project's board waits on a card of
+		// this workspace (the "x" on a cross-project "needed by" chip).
+		unlinkCrossProjectDependent: workspaceProcedure
+			.input(runtimeCrossProjectUnlinkDependentRequestSchema)
+			.output(runtimeCrossProjectUnlinkDependentResponseSchema)
+			.mutation(async ({ ctx, input }) => {
+				return await ctx.crossProjectApi.unlinkDependent(ctx.workspaceScope, input);
 			}),
 		stopTaskSession: workspaceProcedure
 			.input(runtimeTaskSessionStopRequestSchema)

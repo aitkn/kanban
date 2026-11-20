@@ -6,7 +6,10 @@ import type {
 	RuntimeTaskSessionSummary,
 } from "../../../src/core/api-contract";
 import { resolveLiveTaskColumnId } from "../../../src/core/task-prerequisites";
-import { collectReferencedTasksByProjectId } from "../../../src/server/cross-project-task-refs";
+import {
+	collectDependentTasksByProjectId,
+	collectReferencedTasksByProjectId,
+} from "../../../src/server/cross-project-task-refs";
 
 function card(id: string, overrides: Partial<RuntimeBoardCard> = {}): RuntimeBoardCard {
 	return {
@@ -153,5 +156,68 @@ describe("sked fork: cross-project task refs", () => {
 		// A stale summary never pulls a backlog or done card anywhere.
 		expect(resolveLiveTaskColumnId("backlog", session("t", "interrupted"))).toBe("backlog");
 		expect(resolveLiveTaskColumnId("trash", session("t", "running"))).toBe("trash");
+	});
+});
+
+describe("sked fork: cross-project dependents (the mirror of task refs)", () => {
+	it("lists, for each project, the cards on other boards that wait on its tasks, with their column", () => {
+		const apiBoard = board({
+			review: [card("api1", { title: "Call the column", dependsOn: [{ taskId: "dbBack", projectId: "db" }] })],
+		});
+		const result = collectDependentTasksByProjectId([
+			{ workspaceId: "web", board: webBoard },
+			{ workspaceId: "db", board: dbBoard },
+			{ workspaceId: "api", board: apiBoard },
+		]);
+
+		const wait1 = {
+			dependentProjectId: "web",
+			dependentTaskId: "wait1",
+			title: "Title of wait1",
+			columnId: "backlog",
+		};
+		expect(result.get("db")).toEqual([
+			{ taskId: "dbBack", ...wait1 },
+			{ taskId: "dbProg", ...wait1 },
+			{ taskId: "dbRevw", ...wait1 },
+			{ taskId: "dbDone", ...wait1 },
+			{ taskId: "dbGone", ...wait1 },
+			{
+				taskId: "dbBack",
+				dependentProjectId: "api",
+				dependentTaskId: "api1",
+				title: "Call the column",
+				columnId: "review",
+			},
+		]);
+		// The same-board ref (wait1 -> local) is the board's own business, not a cross-project dependent.
+		expect(result.get("web")).toEqual([]);
+		expect(result.get("api")).toEqual([]);
+		// A project removed from Kanban has no board to show the chip on.
+		expect(result.has("removed-project")).toBe(false);
+	});
+
+	it("applies the dependent's live session state", () => {
+		const result = collectDependentTasksByProjectId([
+			{
+				workspaceId: "web",
+				board: board({ in_progress: [card("wait1", { dependsOn: [{ taskId: "dbBack", projectId: "db" }] })] }),
+				sessionsByTaskId: new Map([["wait1", session("wait1", "awaiting_review")]]),
+			},
+			{ workspaceId: "db", board: dbBoard },
+		]);
+
+		expect(result.get("db")?.map((dependent) => dependent.columnId)).toEqual(["review"]);
+	});
+
+	it("lists nothing from a board that was never read, or from a ref to the board's own project", () => {
+		const selfRef = board({ backlog: [card("a", { dependsOn: [{ taskId: "b", projectId: "web" }] }), card("b")] });
+		const result = collectDependentTasksByProjectId([
+			{ workspaceId: "web", board: selfRef },
+			{ workspaceId: "db", board: null },
+		]);
+
+		expect(result.get("web")).toEqual([]);
+		expect(result.get("db")).toEqual([]);
 	});
 });

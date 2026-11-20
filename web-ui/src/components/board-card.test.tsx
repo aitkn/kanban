@@ -6,9 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BoardCard } from "@/components/board-card";
 import {
 	type CrossProjectTaskReferences,
+	resolveCrossProjectDependents,
 	resolveCrossProjectTaskReference,
 } from "@/components/dependencies/cross-project-task-references";
-import { useTaskReferenceNavigation } from "@/components/dependencies/use-task-reference-navigation";
+import {
+	type TaskLinkToRemove,
+	useTaskReferenceNavigation,
+} from "@/components/dependencies/use-task-reference-navigation";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { RuntimeProjectSummary, RuntimeTaskSessionSummary } from "@/runtime/types";
 import type { BoardCard as BoardCardModel, BoardColumn, ReviewTaskWorkspaceSnapshot } from "@/types";
@@ -1031,6 +1035,7 @@ describe("BoardCard", () => {
 			}): React.ReactElement {
 				const crossProject: CrossProjectTaskReferences = {
 					resolveProjectTask: (projectId, taskId) => resolveCrossProjectTaskReference(projects, projectId, taskId),
+					resolveProjectTaskDependents: () => [],
 					openProjectTask,
 				};
 				const taskReferences = useTaskReferenceNavigation({
@@ -1124,6 +1129,218 @@ describe("BoardCard", () => {
 						(button) => button.textContent,
 					),
 				).toEqual(["back1"]);
+			});
+		});
+
+		describe("needed-by chips and link removal", () => {
+			const prereq = createCard({
+				id: "pre1",
+				title: "Prerequisite",
+				prompt: "Prerequisite",
+				dependsOn: [{ taskId: "back1" }, { taskId: "dbBack", projectId: "skedai-db" }],
+			});
+			const neededColumns: BoardColumn[] = [
+				column("backlog", "Backlog", [
+					prereq,
+					createCard({ id: "back1", title: "Backlog prereq", prompt: "Backlog prereq" }),
+					createCard({ id: "need1", title: "Waits in backlog", prompt: "Waits", dependsOn: [{ taskId: "pre1" }] }),
+				]),
+				column("in_progress", "In Progress", [
+					createCard({
+						id: "need2",
+						title: "Waits running",
+						prompt: "Waits running",
+						dependsOn: [{ taskId: "back1" }, { taskId: "pre1" }],
+					}),
+				]),
+				column("review", "Review", []),
+				column("trash", "Done", [
+					createCard({ id: "need3", title: "Waited, done", prompt: "Waited", dependsOn: [{ taskId: "pre1" }] }),
+				]),
+			];
+			const taskCounts = { backlog: 0, in_progress: 0, review: 0, trash: 0 };
+			const projects: RuntimeProjectSummary[] = [
+				{
+					id: "skedai-web",
+					path: "/repos/skedai-web",
+					name: "skedai-web",
+					shortName: "web",
+					taskCounts,
+					dependentTasks: [
+						{
+							taskId: "pre1",
+							dependentProjectId: "skedai-db",
+							dependentTaskId: "dbWait",
+							title: "Db waits",
+							columnId: "review",
+						},
+						{
+							taskId: "back1",
+							dependentProjectId: "skedai-db",
+							dependentTaskId: "dbOther",
+							title: "Waits on another card",
+							columnId: "backlog",
+						},
+					],
+				},
+				{
+					id: "skedai-db",
+					path: "/repos/skedai-db",
+					name: "skedai-db",
+					shortName: "db",
+					taskCounts,
+					referencedTasks: [{ taskId: "dbBack", title: "Add the column", columnId: "backlog" }],
+				},
+			];
+
+			interface NeededByHandlers {
+				onCardClick: () => void;
+				onCardSelect: (taskId: string) => void;
+				openProjectTask: CrossProjectTaskReferences["openProjectTask"];
+				onRemoveLink?: (link: TaskLinkToRemove) => void;
+			}
+
+			function NeededByHarness({
+				onCardClick,
+				onCardSelect,
+				openProjectTask,
+				onRemoveLink,
+			}: NeededByHandlers): React.ReactElement {
+				const crossProject: CrossProjectTaskReferences = {
+					resolveProjectTask: (projectId, taskId) => resolveCrossProjectTaskReference(projects, projectId, taskId),
+					resolveProjectTaskDependents: (taskId) => resolveCrossProjectDependents(projects, "skedai-web", taskId),
+					openProjectTask,
+				};
+				const taskReferences = useTaskReferenceNavigation({
+					columns: neededColumns,
+					onCardSelect,
+					onEditTask: vi.fn(),
+					crossProject,
+					onRemoveLink,
+				});
+				return (
+					<TooltipProvider>
+						<BoardCard
+							card={prereq}
+							index={0}
+							columnId="backlog"
+							onClick={onCardClick}
+							taskReferences={taskReferences}
+						/>
+					</TooltipProvider>
+				);
+			}
+
+			async function renderNeededBy(withRemoval = true) {
+				const handlers: NeededByHandlers = {
+					onCardClick: vi.fn(),
+					onCardSelect: vi.fn(),
+					openProjectTask: vi.fn(),
+					...(withRemoval ? { onRemoveLink: vi.fn() } : {}),
+				};
+				await act(async () => {
+					root.render(<NeededByHarness {...handlers} />);
+				});
+				return handlers;
+			}
+
+			function chipsIn(group: string): Array<[string | null, string | null]> {
+				const row = container.querySelector(`[role="group"][aria-label="${group}"]`);
+				return Array.from(row?.querySelectorAll("button[data-reference-state]") ?? []).map((button) => [
+					button.textContent,
+					button.getAttribute("data-reference-state"),
+				]);
+			}
+
+			function removeButton(ariaLabel: string): HTMLButtonElement {
+				const found = container.querySelector<HTMLButtonElement>(`button[aria-label="${ariaLabel}"]`);
+				if (!found) {
+					throw new Error(`No remove button "${ariaLabel}"`);
+				}
+				return found;
+			}
+
+			it("shows the cards waiting on this one in their own row, apart from its prerequisites", async () => {
+				await renderNeededBy();
+
+				expect(chipsIn("Depends on")).toEqual([
+					["back1", "backlog"],
+					["db#dbBack", "backlog"],
+				]);
+				// Same-board dependents in board order, a done one included, then the other board's.
+				expect(chipsIn("Needed by")).toEqual([
+					["need1", "backlog"],
+					["need2", "in_progress"],
+					["need3", "trash"],
+					["db#dbWait", "review"],
+				]);
+				expect(chip("need2").className).toContain("text-status-orange");
+				expect(chip("db#dbWait").getAttribute("aria-label")).toBe(
+					"Open db#dbWait in project skedai-db, which needs this card (Review)",
+				);
+			});
+
+			it("opens a needed-by card as clicking it would, without opening this card", async () => {
+				const handlers = await renderNeededBy();
+
+				const mouseDown = await press(chip("need2"));
+				await press(chip("db#dbWait"));
+				await press(chip("need3"));
+
+				expect(mouseDown.defaultPrevented).toBe(true);
+				expect(handlers.onCardSelect).toHaveBeenCalledWith("need2");
+				expect(handlers.openProjectTask).toHaveBeenCalledWith("skedai-db", "dbWait");
+				expect(mockShowAppToast).toHaveBeenCalledWith(
+					expect.objectContaining({ message: expect.stringContaining("need3") }),
+				);
+				expect(handlers.onCardClick).not.toHaveBeenCalled();
+			});
+
+			it("removes the whole link from the x on either chip, without opening anything", async () => {
+				const handlers = await renderNeededBy();
+
+				const mouseDown = await press(removeButton("Remove link: pre1 depends on back1"));
+				await press(removeButton("Remove link: pre1 depends on db#dbBack"));
+				await press(removeButton("Remove link: need1 depends on pre1"));
+				await press(removeButton("Remove link: db#dbWait depends on pre1"));
+
+				expect(mouseDown.defaultPrevented).toBe(true);
+				expect(vi.mocked(handlers.onRemoveLink)?.mock.calls).toEqual([
+					[{ kind: "this_board", waitingTaskId: "pre1", prerequisite: { taskId: "back1" } }],
+					[
+						{
+							kind: "this_board",
+							waitingTaskId: "pre1",
+							prerequisite: { taskId: "dbBack", projectId: "skedai-db" },
+						},
+					],
+					[{ kind: "this_board", waitingTaskId: "need1", prerequisite: { taskId: "pre1" } }],
+					[{ kind: "other_board", taskId: "pre1", dependentProjectId: "skedai-db", dependentTaskId: "dbWait" }],
+				]);
+				expect(handlers.onCardClick).not.toHaveBeenCalled();
+				expect(handlers.onCardSelect).not.toHaveBeenCalled();
+				expect(handlers.openProjectTask).not.toHaveBeenCalled();
+			});
+
+			it("keeps the x out of sight until the chip is hovered or focused, and reachable by keyboard", async () => {
+				await renderNeededBy();
+
+				const remove = removeButton("Remove link: need1 depends on pre1");
+				expect(remove.tagName).toBe("BUTTON");
+				expect(remove.className).toContain("opacity-0");
+				expect(remove.className).toContain("group-hover/chip:opacity-100");
+				expect(remove.className).toContain("group-focus-within/chip:opacity-100");
+				// Hidden, it overhangs the next chip and must not take that chip's clicks.
+				expect(remove.className).toContain("pointer-events-none");
+				expect(remove.className).toContain("group-hover/chip:pointer-events-auto");
+				expect(remove.getAttribute("tabindex")).toBeNull();
+			});
+
+			it("shows no x when the view cannot remove links", async () => {
+				await renderNeededBy(false);
+
+				expect(chipsIn("Needed by")).toHaveLength(4);
+				expect(container.querySelectorAll('button[aria-label^="Remove link"]')).toHaveLength(0);
 			});
 		});
 

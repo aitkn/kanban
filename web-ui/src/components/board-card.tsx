@@ -18,6 +18,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DependsOnChips } from "@/components/dependencies/depends-on-chips";
+import { NeededByChips } from "@/components/dependencies/needed-by-chips";
 import { TaskIdBadge } from "@/components/dependencies/task-id-badge";
 import type { TaskReferences } from "@/components/dependencies/use-task-reference-navigation";
 import {
@@ -286,7 +287,7 @@ export function BoardCard({
 	workspacePath?: string | null;
 	defaultClineModelId?: string | null;
 	pendingPrerequisiteCount?: number;
-	/** sked fork: resolves and opens the cards in `card.dependsOn`; without it no chips render. */
+	/** sked fork: resolves and opens the cards this card links to and from; without it no chips render. */
 	taskReferences?: TaskReferences;
 }): React.ReactElement {
 	const [isHovered, setIsHovered] = useState(false);
@@ -781,8 +782,9 @@ export function BoardCard({
 									</span>
 								</div>
 							) : null}
-							{/* sked fork: the cards this one was linked to, coloured by their current column. */}
-							<DependsOnChips dependsOn={card.dependsOn} taskReferences={taskReferences} />
+							{/* sked fork: the cards this one was linked to, and the cards linked to it, coloured by their current column. */}
+							<DependsOnChips taskId={card.id} dependsOn={card.dependsOn} taskReferences={taskReferences} />
+							<NeededByChips taskId={card.id} taskReferences={taskReferences} />
 							{sessionActivity ? (
 								<div
 									className="flex gap-1.5 items-start mt-[6px]"

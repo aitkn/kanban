@@ -13,10 +13,14 @@ import type {
 	RuntimeProjectSummary,
 	RuntimeTaskSessionSummary,
 } from "../../src/core/api-contract";
+import { unlinkCrossProjectDependent } from "../../src/server/cross-project-unlink";
 import { createWorkspaceRegistry, type WorkspaceRegistry } from "../../src/server/workspace-registry";
 import {
 	getWorkspacesRootPath,
+	listWorkspaceIndexEntries,
 	loadWorkspaceContext,
+	loadWorkspaceState,
+	mutateWorkspaceState,
 	saveWorkspaceState,
 	setWorkspaceShortName,
 } from "../../src/state/workspace-state";
@@ -104,6 +108,7 @@ interface Sandbox {
 	webId: string;
 	dbId: string;
 	dbPath: string;
+	webPath: string;
 }
 
 async function withSandbox(run: (sandbox: Sandbox) => Promise<void>): Promise<void> {
@@ -140,7 +145,7 @@ async function withSandbox(run: (sandbox: Sandbox) => Promise<void>): Promise<vo
 				hasGitRepository: (path) => existsSync(join(path, ".git")),
 				pathIsDirectory: async (path) => existsSync(path) && statSync(path).isDirectory(),
 			});
-			await run({ registry, webId: web.workspaceId, dbId: db.workspaceId, dbPath });
+			await run({ registry, webId: web.workspaceId, dbId: db.workspaceId, dbPath, webPath });
 		} finally {
 			cleanup();
 		}
@@ -193,6 +198,48 @@ describe.sequential("sked fork: cross-project task refs in the projects payload"
 
 			expect(after).toEqual(before);
 			expect(after).toHaveLength(2);
+		});
+	});
+
+	it("carries the cards on other boards that wait on each project's tasks, and unlinks one from the prerequisite's side", async () => {
+		await withSandbox(async ({ registry, webId, dbId, webPath }) => {
+			const wait1 = {
+				dependentProjectId: webId,
+				dependentTaskId: "wait1",
+				title: "Title wait1",
+				columnId: "backlog",
+			};
+			expect(summaryOf((await registry.buildProjectsPayload(webId)).projects, dbId).dependentTasks).toEqual([
+				{ taskId: "dbProg", ...wait1 },
+				{ taskId: "dbRevw", ...wait1 },
+				{ taskId: "dbGone", ...wait1 },
+			]);
+			expect(summaryOf((await registry.buildProjectsPayload(webId)).projects, webId).dependentTasks).toEqual([]);
+
+			const notified: string[] = [];
+			const response = await unlinkCrossProjectDependent(
+				{
+					listProjects: listWorkspaceIndexEntries,
+					mutateWorkspaceState,
+					notifyWorkspaceStateUpdated: ({ workspaceId }) => notified.push(workspaceId),
+				},
+				dbId,
+				{ taskId: "dbRevw", dependentProjectId: webId, dependentTaskId: "wait1" },
+			);
+
+			expect(response).toEqual({ ok: true });
+			expect(notified).toEqual([webId]);
+			// The whole link is gone from the waiting card's board, as `task unlink` leaves it.
+			const webCard = (await loadWorkspaceState(webPath)).board.columns[0]?.cards[0];
+			expect(webCard?.dependsOn).toEqual([
+				{ taskId: "dbProg", projectId: dbId },
+				{ taskId: "dbGone", projectId: dbId },
+			]);
+			expect(
+				summaryOf((await registry.buildProjectsPayload(webId)).projects, dbId).dependentTasks?.map(
+					(dependent) => dependent.taskId,
+				),
+			).toEqual(["dbProg", "dbGone"]);
 		});
 	});
 });

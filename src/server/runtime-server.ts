@@ -36,7 +36,7 @@ import {
 	validatePasscode,
 	validateSession,
 } from "../security/passcode-manager";
-import { loadWorkspaceContextById, mutateWorkspaceState } from "../state/workspace-state";
+import { listWorkspaceIndexEntries, loadWorkspaceContextById, mutateWorkspaceState } from "../state/workspace-state";
 import type { TerminalSessionManager } from "../terminal/session-manager";
 import { createTerminalWebSocketBridge } from "../terminal/ws-server";
 import { type RuntimeTrpcContext, type RuntimeTrpcWorkspaceScope, runtimeAppRouter } from "../trpc/app-router";
@@ -47,6 +47,7 @@ import { createWorkspaceApi } from "../trpc/workspace-api";
 import { ensureTaskWorktreeIfDoesntExist } from "../workspace/task-worktree";
 import { getWebUiDir, normalizeRequestPath, readAsset } from "./assets";
 import { createCrossProjectAutoStarter, moveBacklogTaskToInProgressOnBoard } from "./cross-project-auto-start";
+import { type CrossProjectUnlinkDependencies, unlinkCrossProjectDependent } from "./cross-project-unlink";
 import { handleHttpRequest, handleSocketUpgrade } from "./middleware";
 import type { RuntimeStateHub } from "./runtime-state-hub";
 import type { WorkspaceRegistry } from "./workspace-registry";
@@ -216,6 +217,14 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 			void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(scope.workspaceId);
 		},
 	});
+	const crossProjectUnlinkDependencies: CrossProjectUnlinkDependencies = {
+		listProjects: listWorkspaceIndexEntries,
+		mutateWorkspaceState,
+		notifyWorkspaceStateUpdated: (scope) => {
+			void deps.runtimeStateHub.broadcastRuntimeWorkspaceStateUpdated(scope.workspaceId, scope.workspacePath);
+			void deps.runtimeStateHub.broadcastRuntimeProjectsUpdated(scope.workspaceId);
+		},
+	};
 
 	const createTrpcContext = async (req: IncomingMessage): Promise<RuntimeTrpcContext> => {
 		const requestUrl = new URL(req.url ?? "/", "http://localhost");
@@ -278,6 +287,8 @@ export async function createRuntimeServer(deps: CreateRuntimeServerDependencies)
 						taskId: input.taskId,
 						startTaskSession: runtimeApi.startTaskSession,
 					}),
+				unlinkDependent: async (workspaceScope, input) =>
+					await unlinkCrossProjectDependent(crossProjectUnlinkDependencies, workspaceScope.workspaceId, input),
 			},
 		};
 	};
