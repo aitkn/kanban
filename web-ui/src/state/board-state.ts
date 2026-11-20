@@ -399,8 +399,24 @@ export function canCreateTaskDependency(board: BoardData, fromTaskId: string, to
 	return runtimeTaskState.canAddTaskDependency(board, fromTaskId, toTaskId);
 }
 
-export function removeTaskDependency(board: BoardData, dependencyId: string): { board: BoardData; removed: boolean } {
-	return runtimeTaskState.removeTaskDependency(board, dependencyId);
+/**
+ * sked fork: removes the link through which `waitingTaskId` waits on `prerequisite` (on this
+ * board, or with `projectId` on another project's): its `dependsOn` entry and any live link, as
+ * `kanban task unlink` does. Returns the same board when there is no such link.
+ */
+export function removeTaskLinkFromBoard(
+	board: BoardData,
+	waitingTaskId: string,
+	prerequisite: TaskDependsOnRef,
+): BoardData {
+	const result =
+		prerequisite.projectId === undefined
+			? runtimeTaskState.removeTaskPrerequisite(board, waitingTaskId, prerequisite.taskId)
+			: runtimeTaskState.removeCrossProjectPrerequisite(board, waitingTaskId, {
+					taskId: prerequisite.taskId,
+					projectId: prerequisite.projectId,
+				});
+	return result.removed ? result.board : board;
 }
 
 export function getReadyLinkedTaskIdsForTaskInTrash(

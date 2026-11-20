@@ -1,8 +1,15 @@
 // sked fork: the current column and title of every task that another project's board
-// references in a card's `dependsOn`, so the web UI can colour cross-project chips without
-// holding the other project's board. Delivered on each project summary as `referencedTasks`.
+// references in a card's `dependsOn`, and of every card that references a task on another
+// project's board, so the web UI can show and colour cross-project chips in both directions
+// without holding the other project's board. Delivered on each project summary as
+// `referencedTasks` and `dependentTasks`.
 
-import type { RuntimeBoardData, RuntimeProjectReferencedTask, RuntimeTaskSessionSummary } from "../core/api-contract";
+import type {
+	RuntimeBoardData,
+	RuntimeProjectDependentTask,
+	RuntimeProjectReferencedTask,
+	RuntimeTaskSessionSummary,
+} from "../core/api-contract";
 import { resolveLiveTaskColumnId } from "../core/task-prerequisites";
 
 export interface ProjectBoardForTaskRefs {
@@ -57,6 +64,37 @@ export function collectReferencedTasksByProjectId(
 			}
 		}
 		result.set(workspaceId, referencedTasks);
+	}
+	return result;
+}
+
+/**
+ * For each project, the cards on OTHER projects' boards whose `dependsOn` names one of its tasks
+ * (the mirror of `collectReferencedTasksByProjectId`), with each card's live column. A card that
+ * was deleted takes its `dependsOn` with it, so it is simply absent. Every project gets an entry.
+ */
+export function collectDependentTasksByProjectId(
+	projects: readonly ProjectBoardForTaskRefs[],
+): Map<string, RuntimeProjectDependentTask[]> {
+	const result = new Map<string, RuntimeProjectDependentTask[]>(projects.map(({ workspaceId }) => [workspaceId, []]));
+	for (const { workspaceId, board, sessionsByTaskId } of projects) {
+		for (const column of board?.columns ?? []) {
+			for (const card of column.cards) {
+				for (const ref of card.dependsOn ?? []) {
+					if (ref.projectId === undefined || ref.projectId === workspaceId) {
+						continue;
+					}
+					// A project removed from Kanban has no board to show the chip on.
+					result.get(ref.projectId)?.push({
+						taskId: ref.taskId,
+						dependentProjectId: workspaceId,
+						dependentTaskId: card.id,
+						title: card.title,
+						columnId: resolveLiveTaskColumnId(column.id, sessionsByTaskId?.get(card.id)),
+					});
+				}
+			}
+		}
 	}
 	return result;
 }

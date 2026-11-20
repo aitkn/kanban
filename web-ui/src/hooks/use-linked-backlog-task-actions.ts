@@ -9,7 +9,6 @@ import {
 	addTaskDependency,
 	findCardSelection,
 	moveTaskToColumn,
-	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
 } from "@/state/board-state";
 import { waitForTaskDoneOnServer } from "@/stores/board-persistence-confirmations";
@@ -105,7 +104,6 @@ export function useLinkedBacklogTaskActions({
 	startCrossProjectDependents: (taskId: string) => Promise<RuntimeCrossProjectAutoStartResponse | null>;
 }): {
 	handleCreateDependency: (fromTaskId: string, toTaskId: string) => void;
-	handleDeleteDependency: (dependencyId: string) => void;
 	confirmMoveTaskToTrash: (task: BoardCard, currentBoard?: BoardData) => Promise<void>;
 	requestMoveTaskToTrash: (
 		taskId: string,
@@ -152,16 +150,6 @@ export function useLinkedBacklogTaskActions({
 				return latestResult.added ? latestResult.board : currentBoard;
 			});
 			trackTaskDependencyCreated();
-		},
-		[setBoard],
-	);
-
-	const handleDeleteDependency = useCallback(
-		(dependencyId: string) => {
-			setBoard((currentBoard) => {
-				const removed = removeTaskDependency(currentBoard, dependencyId);
-				return removed.removed ? removed.board : currentBoard;
-			});
 		},
 		[setBoard],
 	);
@@ -302,7 +290,6 @@ export function useLinkedBacklogTaskActions({
 
 	return {
 		handleCreateDependency,
-		handleDeleteDependency,
 		confirmMoveTaskToTrash: async (task: BoardCard, currentBoard?: BoardData) => {
 			await performMoveTaskToTrash(task, currentBoard);
 		},

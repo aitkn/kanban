@@ -96,7 +96,6 @@ export interface UseBoardInteractionsResult {
 	handleProgrammaticCardMoveReady: ReturnType<typeof useProgrammaticCardMoves>["handleProgrammaticCardMoveReady"];
 	confirmMoveTaskToTrash: (task: BoardCard, currentBoard?: BoardData) => Promise<void>;
 	handleCreateDependency: (fromTaskId: string, toTaskId: string) => void;
-	handleDeleteDependency: (dependencyId: string) => void;
 	handleDragEnd: (result: DropResult, options?: { selectDroppedTask?: boolean }) => void;
 	handleStartTask: (taskId: string) => void;
 	handleStartAllBacklogTasks: (taskIds?: string[]) => void;
@@ -560,20 +559,19 @@ export function useBoardInteractions({
 		});
 	}, [programmaticCardMoveCycle, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
 
-	const { confirmMoveTaskToTrash, handleCreateDependency, handleDeleteDependency, requestMoveTaskToTrash } =
-		useLinkedBacklogTaskActions({
-			board,
-			setBoard,
-			setSelectedTaskId,
-			stopTaskSession,
-			cleanupTaskWorkspace,
-			maybeRequestNotificationPermissionForTaskStart,
-			kickoffTaskInProgress,
-			startBacklogTaskWithAnimation,
-			waitForBacklogStartAnimationAvailability: waitForProgrammaticCardMoveAvailability,
-			prerequisites,
-			startCrossProjectDependents,
-		});
+	const { confirmMoveTaskToTrash, handleCreateDependency, requestMoveTaskToTrash } = useLinkedBacklogTaskActions({
+		board,
+		setBoard,
+		setSelectedTaskId,
+		stopTaskSession,
+		cleanupTaskWorkspace,
+		maybeRequestNotificationPermissionForTaskStart,
+		kickoffTaskInProgress,
+		startBacklogTaskWithAnimation,
+		waitForBacklogStartAnimationAvailability: waitForProgrammaticCardMoveAvailability,
+		prerequisites,
+		startCrossProjectDependents,
+	});
 
 	const startBacklogTaskManually = useCallback(
 		(task: BoardCard) => {
@@ -982,7 +980,6 @@ export function useBoardInteractions({
 		handleProgrammaticCardMoveReady,
 		confirmMoveTaskToTrash,
 		handleCreateDependency,
-		handleDeleteDependency,
 		handleDragEnd,
 		handleStartTask,
 		handleStartAllBacklogTasks,

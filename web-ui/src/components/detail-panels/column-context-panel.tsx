@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BoardCard } from "@/components/board-card";
 import type { CrossProjectTaskReferences } from "@/components/dependencies/cross-project-task-references";
 import {
+	type TaskLinkToRemove,
 	type TaskReferences,
 	useTaskReferenceNavigation,
 } from "@/components/dependencies/use-task-reference-navigation";
@@ -249,6 +250,7 @@ export function ColumnContextPanel({
 	inlineTaskEditor,
 	onEditTask,
 	crossProjectTaskReferences,
+	onRemoveTaskLink,
 	onSaveTaskTitle,
 	onCommitTask,
 	onOpenPrTask,
@@ -273,6 +275,8 @@ export function ColumnContextPanel({
 	onEditTask?: (card: BoardCardModel) => void;
 	/** sked fork: resolves and opens prerequisite chips on other projects' boards. */
 	crossProjectTaskReferences?: CrossProjectTaskReferences;
+	/** sked fork: removes a link from a chip's "x". */
+	onRemoveTaskLink?: (link: TaskLinkToRemove) => void;
 	onSaveTaskTitle?: (taskId: string, title: string) => void;
 	onCommitTask?: (taskId: string) => void;
 	onOpenPrTask?: (taskId: string) => void;
@@ -292,6 +296,7 @@ export function ColumnContextPanel({
 		onCardSelect,
 		onEditTask,
 		crossProject: crossProjectTaskReferences,
+		onRemoveLink: onRemoveTaskLink,
 	});
 
 	const handleBeforeCapture = useCallback(

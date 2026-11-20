@@ -13,9 +13,12 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardColumn } from "@/components/board-column";
 import type { CrossProjectTaskReferences } from "@/components/dependencies/cross-project-task-references";
-import { DependencyOverlay } from "@/components/dependencies/dependency-overlay";
+import { DependencyDraftOverlay } from "@/components/dependencies/dependency-draft-overlay";
 import { useDependencyLinking } from "@/components/dependencies/use-dependency-linking";
-import { useTaskReferenceNavigation } from "@/components/dependencies/use-task-reference-navigation";
+import {
+	type TaskLinkToRemove,
+	useTaskReferenceNavigation,
+} from "@/components/dependencies/use-task-reference-navigation";
 import {
 	buildProgrammaticDropResult,
 	nudgeStalledDropAnimation,
@@ -26,7 +29,7 @@ import {
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { canCreateTaskDependency, getPendingPrerequisiteCountByTaskId } from "@/state/board-state";
 import { findCardColumnId, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
-import type { BoardCard, BoardColumnId, BoardData, BoardDependency } from "@/types";
+import type { BoardCard, BoardColumnId, BoardData } from "@/types";
 
 const BOARD_COLUMN_ORDER: BoardColumnId[] = ["backlog", "in_progress", "review", "trash"];
 
@@ -60,9 +63,8 @@ export function KanbanBoard({
 	commitTaskLoadingById,
 	openPrTaskLoadingById,
 	moveToTrashLoadingById,
-	dependencies,
 	onCreateDependency,
-	onDeleteDependency,
+	onRemoveTaskLink,
 	onDragEnd,
 	onRequestProgrammaticCardMoveReady,
 	workspacePath,
@@ -91,9 +93,9 @@ export function KanbanBoard({
 	commitTaskLoadingById?: Record<string, boolean>;
 	openPrTaskLoadingById?: Record<string, boolean>;
 	moveToTrashLoadingById?: Record<string, boolean>;
-	dependencies: BoardDependency[];
 	onCreateDependency?: (fromTaskId: string, toTaskId: string) => void;
-	onDeleteDependency?: (dependencyId: string) => void;
+	/** sked fork: removes a link from a chip's "x"; saved links show as chips, not arrows. */
+	onRemoveTaskLink?: (link: TaskLinkToRemove) => void;
 	onDragEnd: (result: DropResult) => void;
 	onRequestProgrammaticCardMoveReady?: (requestMove: RequestProgrammaticCardMove | null) => void;
 	workspacePath?: string | null;
@@ -130,6 +132,7 @@ export function KanbanBoard({
 		onCardSelect,
 		onEditTask,
 		crossProject: crossProjectTaskReferences,
+		onRemoveLink: onRemoveTaskLink,
 	});
 
 	const programmaticSensor: Sensor = useCallback((api: SensorAPI) => {
@@ -474,13 +477,6 @@ export function KanbanBoard({
 		handleDragEndRef.current = handleDragEnd;
 	}, [handleDragEnd]);
 
-	// Dependency links should reroute as soon as motion starts, not only after drop.
-	// Treat the active card as already belonging to its destination/effective column
-	// so the edge transition can animate alongside the move.
-	const activeTaskEffectiveColumnId =
-		programmaticCardMoveInFlight?.toColumnId ??
-		(activeDragTaskId !== null && activeDragSourceColumnId === "backlog" ? "in_progress" : null);
-
 	return (
 		<DragDropContext
 			onBeforeCapture={handleBeforeCapture}
@@ -535,15 +531,8 @@ export function KanbanBoard({
 						}}
 					/>
 				))}
-				<DependencyOverlay
-					containerRef={boardRef}
-					dependencies={dependencies}
-					draft={dependencyLinking.draft}
-					activeTaskId={activeDragTaskId ?? programmaticCardMoveInFlight?.taskId ?? null}
-					activeTaskEffectiveColumnId={activeTaskEffectiveColumnId}
-					isMotionActive={activeDragTaskId !== null || programmaticCardMoveInFlight !== null}
-					onDeleteDependency={onDeleteDependency}
-				/>
+				{/* sked fork: only the link being dragged draws an arrow; saved links show as chips on the cards. */}
+				<DependencyDraftOverlay containerRef={boardRef} draft={dependencyLinking.draft} />
 			</section>
 		</DragDropContext>
 	);

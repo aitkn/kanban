@@ -56,6 +56,7 @@ import { useShortcutActions } from "@/hooks/use-shortcut-actions";
 import { useStartupOnboarding } from "@/hooks/use-startup-onboarding";
 import { useTaskBranchOptions } from "@/hooks/use-task-branch-options";
 import { useTaskEditor } from "@/hooks/use-task-editor";
+import { useTaskLinkRemoval } from "@/hooks/use-task-link-removal";
 import { useTaskSessions } from "@/hooks/use-task-sessions";
 import { useTaskStartActions } from "@/hooks/use-task-start-actions";
 import { useTerminalPanels } from "@/hooks/use-terminal-panels";
@@ -575,7 +576,6 @@ export default function App(): ReactElement {
 	const {
 		handleProgrammaticCardMoveReady,
 		handleCreateDependency,
-		handleDeleteDependency,
 		handleDragEnd,
 		handleStartTask,
 		handleStartAllBacklogTasks,
@@ -629,6 +629,9 @@ export default function App(): ReactElement {
 		setSelectedTaskId,
 		prerequisites,
 	});
+
+	// sked fork: the "x" on a link chip removes the whole link, on this board or another project's.
+	const handleRemoveTaskLink = useTaskLinkRemoval({ currentProjectId, setBoard });
 
 	// sked fork: cross-project prerequisite chips resolve against `projects` and open across a project switch.
 	const crossProjectTaskReferences = useCrossProjectTaskNavigation({
@@ -984,9 +987,8 @@ export default function App(): ReactElement {
 												moveToTrashLoadingById={moveToTrashLoadingById}
 												onMoveToTrashTask={handleMoveReviewCardToTrash}
 												onRestoreFromTrashTask={handleRestoreTaskFromTrash}
-												dependencies={board.dependencies}
 												onCreateDependency={handleCreateDependency}
-												onDeleteDependency={handleDeleteDependency}
+												onRemoveTaskLink={handleRemoveTaskLink}
 												onRequestProgrammaticCardMoveReady={
 													selectedCard ? undefined : handleProgrammaticCardMoveReady
 												}
@@ -1062,6 +1064,7 @@ export default function App(): ReactElement {
 										handleOpenEditTask(task, { preserveDetailSelection: true });
 									}}
 									crossProjectTaskReferences={crossProjectTaskReferences}
+									onRemoveTaskLink={handleRemoveTaskLink}
 									onSaveTaskTitle={handleSaveTaskTitle}
 									onCommitTask={handleCommitTask}
 									onOpenPrTask={handleOpenPrTask}

@@ -2,6 +2,7 @@ import { type RuntimeConfigState, toGlobalRuntimeConfigState } from "../config/r
 import type {
 	RuntimeBoardColumnId,
 	RuntimeBoardData,
+	RuntimeProjectDependentTask,
 	RuntimeProjectReferencedTask,
 	RuntimeProjectSummary,
 	RuntimeProjectTaskCounts,
@@ -20,7 +21,11 @@ import {
 } from "../state/workspace-state";
 import type { PtyBackend } from "../terminal/pty-backend";
 import { TerminalSessionManager } from "../terminal/session-manager";
-import { collectReferencedTasksByProjectId, type ProjectBoardForTaskRefs } from "./cross-project-task-refs";
+import {
+	collectDependentTasksByProjectId,
+	collectReferencedTasksByProjectId,
+	type ProjectBoardForTaskRefs,
+} from "./cross-project-task-refs";
 
 export interface WorkspaceRegistryScope {
 	workspaceId: string;
@@ -189,6 +194,7 @@ function toProjectSummary(project: {
 	// sked fork: set by `buildProjectsPayload`; a lone summary (a project just added) has neither.
 	shortName?: string;
 	referencedTasks?: RuntimeProjectReferencedTask[];
+	dependentTasks?: RuntimeProjectDependentTask[];
 }): RuntimeProjectSummary {
 	const normalized = project.repoPath.replaceAll("\\", "/").replace(/\/+$/g, "");
 	const segments = normalized.split("/").filter((segment) => segment.length > 0);
@@ -200,6 +206,7 @@ function toProjectSummary(project: {
 		taskCounts: project.taskCounts,
 		...(project.shortName !== undefined ? { shortName: project.shortName } : {}),
 		...(project.referencedTasks !== undefined ? { referencedTasks: project.referencedTasks } : {}),
+		...(project.dependentTasks !== undefined ? { dependentTasks: project.dependentTasks } : {}),
 	};
 }
 
@@ -393,13 +400,13 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 		const summarized = await summarizeProjects(projects);
 		// sked fork: short names and cross-project chip targets ride on the project summaries.
 		const shortNames = resolveProjectShortNames(projects);
-		const referencedTasksByProjectId = collectReferencedTasksByProjectId(
-			summarized.map(({ project, board, sessionsByTaskId }) => ({
-				workspaceId: project.workspaceId,
-				board,
-				sessionsByTaskId,
-			})),
-		);
+		const boardsForTaskRefs = summarized.map(({ project, board, sessionsByTaskId }) => ({
+			workspaceId: project.workspaceId,
+			board,
+			sessionsByTaskId,
+		}));
+		const referencedTasksByProjectId = collectReferencedTasksByProjectId(boardsForTaskRefs);
+		const dependentTasksByProjectId = collectDependentTasksByProjectId(boardsForTaskRefs);
 		const projectSummaries = summarized.map(({ project, taskCounts }) =>
 			toProjectSummary({
 				workspaceId: project.workspaceId,
@@ -407,6 +414,7 @@ export async function createWorkspaceRegistry(deps: CreateWorkspaceRegistryDepen
 				taskCounts,
 				shortName: shortNames.get(project.workspaceId) ?? project.workspaceId,
 				referencedTasks: referencedTasksByProjectId.get(project.workspaceId) ?? [],
+				dependentTasks: dependentTasksByProjectId.get(project.workspaceId) ?? [],
 			}),
 		);
 		return {
